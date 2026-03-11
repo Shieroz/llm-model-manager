@@ -3,7 +3,7 @@ networks:
 
 services:
   llm-model-manager:
-    build: .
+    image: local/llm-model-manager:latest
     container_name: llm-model-manager
     restart: unless-stopped
     ports:
