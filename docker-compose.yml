@@ -3,7 +3,7 @@ networks:
 
 services:
   llm-model-manager:
-    build: ${DOCKER}/llm-model-manager
+    build: .
     container_name: llm-model-manager
     restart: unless-stopped
     ports:
