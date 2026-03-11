@@ -1,0 +1,46 @@
+networks:
+  llama-net:
+
+services:
+  llm-model-manager:
+    build: ${DOCKER}/llm-model-manager
+    container_name: llm-model-manager
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${MODELS}:/models
+
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:full-cuda
+    container_name: llama-cpp
+    restart: unless-stopped
+    environment:
+      - LLAMA_CACHE=/models
+    ports:
+      - 8080:8081
+    networks:
+      - llama-net
+    volumes:
+      - ${MODELS}:/models
+    command: >
+      --server
+      --models-dir /models/served
+      --models-preset /models/served/models.ini
+      --models-max 4
+      --host 0.0.0.0
+      --port 8081
+      -fit on
+      -fitc 16384
+      -fa on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      -t 8
+      -n -1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
