@@ -73,12 +73,12 @@ def sync_system(state):
         if not files:
             continue 
             
-        # THE FIX: Automatically append the Quant to the filenames and INI sections
-        symlink_filename = f"{name}-[{quant}].gguf"
+        # Automatically append the Quant to the filenames and INI sections
+        symlink_filename = f"{name}-{quant}.gguf"
         symlink_path = os.path.join(SERVED_DIR, symlink_filename)
         os.symlink(files[0], symlink_path)
         
-        section_name = f"{name}-[{quant}]"
+        section_name = f"{name}-{quant}"
         config.add_section(section_name)
         config.set(section_name, "model", symlink_path)
         
