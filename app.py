@@ -1,18 +1,21 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
-from huggingface_hub import snapshot_download, HfApi
+from huggingface_hub import HfApi
 from pydantic import BaseModel
 import subprocess
 import threading
 import fnmatch
-import time
 import os
 import glob
 import configparser
 import json
 import shutil
 import asyncio
+import pty
+import re
+import sys
+import time
 
 CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
@@ -32,16 +35,6 @@ def format_bytes(bytes_num):
         if bytes_num < 1024.0: return f"{bytes_num:.1f} {unit}"
         bytes_num /= 1024.0
     return f"{bytes_num:.1f} PB"
-
-def get_dir_size(path):
-    total = 0
-    try:
-        for dirpath, _, filenames in os.walk(path):
-            for f in filenames:
-                fp = os.path.join(dirpath, f)
-                if not os.path.islink(fp): total += os.path.getsize(fp)
-    except: pass
-    return total
 
 def load_state():
     if os.path.exists(STATE_FILE):
@@ -95,13 +88,11 @@ def restart_llama_container():
 
 # --- WEBSOCKET MANAGER ---
 class ConnectionManager:
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
+    def __init__(self): self.active_connections: list[WebSocket] = []
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+    def disconnect(self, websocket: WebSocket): self.active_connections.remove(websocket)
     async def broadcast(self, message: str):
         for connection in self.active_connections:
             try: await connection.send_text(message)
@@ -109,70 +100,136 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- BACKGROUND WORKER WITH TELEMETRY ---
-def process_model(req: ModelSetup, params_dict: dict, total_size: int):
-    repo_cache_dir = os.path.join(CACHE_DIR, f"models--{req.hf_repo.replace('/', '--')}")
-    baseline_size = get_dir_size(repo_cache_dir)
-    download_status = {"running": True}
+# --- PTY SUBPROCESS WRAPPER ---
+def process_model(req: ModelSetup, params_dict: dict):
+    # 1. Write an inline Python script to execute the download natively.
+    # This completely bypasses the missing CLI binary and internal module paths.
+    script_code = f"""
+import os
+os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+from huggingface_hub import snapshot_download
 
-    def monitor():
-        last_downloaded = 0
-        last_time = time.time()
-        while download_status["running"]:
-            time.sleep(1)
-            current_size = get_dir_size(repo_cache_dir)
-            downloaded = max(0, current_size - baseline_size)
-            if total_size > 0: downloaded = min(downloaded, total_size)
-            
-            now = time.time()
-            speed = (downloaded - last_downloaded) / (now - last_time) if now - last_time > 0 else 0
-            last_downloaded = downloaded
-            last_time = now
-            eta = (total_size - downloaded) / speed if speed > 0 and total_size > 0 else 0
-            
-            state = load_state()
-            if req.symlink_name in state and state[req.symlink_name].get("status") == "downloading":
-                state[req.symlink_name]["progress"] = {
-                    "downloaded": downloaded, "total": total_size, "speed": speed, "eta": eta
-                }
-                save_state(state)
+snapshot_download(
+    repo_id='''{req.hf_repo}''',
+    allow_patterns='''*{req.quant}*''',
+    cache_dir='''{CACHE_DIR}'''
+)
+"""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    script_path = os.path.join(CACHE_DIR, f"dl_{req.symlink_name}.py")
+    with open(script_path, "w") as f:
+        f.write(script_code)
 
-    monitor_thread = threading.Thread(target=monitor, daemon=True)
-    monitor_thread.start()
+    # 2. Execute the script using the exact same Python interpreter
+    cmd = [sys.executable, script_path]
+
+    master, slave = pty.openpty()
+    env = os.environ.copy()
+    env["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+    
+    # CRITICAL: Pass the active Python path so the subprocess easily finds huggingface_hub
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
 
     try:
-        snapshot_download(repo_id=req.hf_repo, allow_patterns=f"*{req.quant}*", cache_dir=CACHE_DIR)
-        download_status["running"] = False
-        monitor_thread.join(timeout=2)
-        
-        state = load_state()
-        if req.symlink_name in state:
-            state[req.symlink_name]["status"] = "ready"
-            save_state(state)
-            
-        sync_system(state)
-        restart_llama_container()
-        print(f"Successfully provisioned: {req.symlink_name}")
-        
+        process = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
     except Exception as e:
-        download_status["running"] = False
         state = load_state()
         if req.symlink_name in state:
             state[req.symlink_name]["status"] = "error"
-            state[req.symlink_name]["error_msg"] = str(e)
+            state[req.symlink_name]["error_msg"] = f"Subprocess failed: {e}"[:120]
+            save_state(state)
+        os.close(slave)
+        os.close(master)
+        return
+
+    os.close(slave)
+
+    buffer = ""
+    error_log = []
+    last_ui_update = 0
+    
+    while True:
+        try:
+            # 1. The Sleep Throttle: Let the pipe fill up so we aren't doing 1,000 syscalls a second
+            time.sleep(0.05)
+            
+            # 2. The Big Gulp: Read 8x more data at once to drain the buffer instantly
+            data = os.read(master, 8192).decode('utf-8', errors='replace')
+            if not data: break
+            buffer += data
+            if len(error_log) < 100: error_log.append(data)
+
+            now = time.time()
+            
+            # 3. The UI Throttle: Only do the heavy Regex and JSON saving twice a second
+            if now - last_ui_update > 0.5:
+                lines = buffer.replace('\r', '\n').split('\n')
+                buffer = lines.pop() # Keep the last incomplete chunk
+
+                # 4. The Skim: Read the buffer BACKWARDS. We only care about the newest progress!
+                for line in reversed(lines):
+                    clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
+                    data_m = re.search(r'([0-9.]+[A-Za-z]?B?)\s*/\s*([0-9.]+[A-Za-z]?B?)', clean_line, re.IGNORECASE)
+                    
+                    if data_m:
+                        perc_m = re.search(r'(\d{1,3})%', clean_line)
+                        speed_m = re.search(r'([0-9.]+[A-Za-z]?B?/s)', clean_line, re.IGNORECASE)
+                        eta_m = re.search(r'<([0-9:]+)', clean_line)
+
+                        state = load_state()
+                        if req.symlink_name in state and state[req.symlink_name].get("status") == "downloading":
+                            dl_str = data_m.group(1).upper()
+                            tot_str = data_m.group(2).upper()
+                            if not dl_str.endswith('B'): dl_str += "B"
+                            if not tot_str.endswith('B'): tot_str += "B"
+
+                            state[req.symlink_name]["progress_str"] = {
+                                "percent": perc_m.group(1) if perc_m else "0",
+                                "downloaded": dl_str,
+                                "total": tot_str,
+                                "speed": speed_m.group(1).upper() if speed_m else "--",
+                                "eta": eta_m.group(1) if eta_m else "--"
+                            }
+                            save_state(state)
+                        
+                        last_ui_update = now
+                        break # Success! We found the newest frame. Ignore the rest of the buffer.
+
+        except OSError:
+            break # PTY closed
+
+    process.wait()
+    os.close(master)
+    try: os.unlink(script_path) # Clean up the temp script
+    except: pass
+
+    state = load_state()
+    if process.returncode == 0:
+        if req.symlink_name in state:
+            state[req.symlink_name]["status"] = "ready"
+            save_state(state)
+        sync_system(state)
+        restart_llama_container()
+    else:
+        if req.symlink_name in state:
+            state[req.symlink_name]["status"] = "error"
+            err_text = "".join(error_log[-10:]).replace('\n', ' ')
+            
+            # Smart Extraction: Pulls out just the exact Python Exception so it fits cleanly on the UI card
+            exc_match = re.search(r'([A-Za-z]+Error:.*)', err_text)
+            final_err = exc_match.group(1) if exc_match else err_text
+            state[req.symlink_name]["error_msg"] = f"Failed: {final_err}"[:120]
             save_state(state)
 
 # --- LIFESPAN (AUTO-RESUME & WS BROADCASTER) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Resume interrupted downloads
     state = load_state()
     for name, data in state.items():
         if data.get("status") == "downloading":
             req = ModelSetup(hf_repo=data["repo"], quant=data["quant"], symlink_name=name, parameters=json.dumps(data["params"]))
-            threading.Thread(target=process_model, args=(req, data["params"], data.get("expected_size", 0)), daemon=True).start()
+            threading.Thread(target=process_model, args=(req, data["params"]), daemon=True).start()
     
-    # 2. Start WebSocket Broadcast loop
     async def broadcast_state():
         while True:
             await asyncio.sleep(1)
@@ -188,14 +245,13 @@ app = FastAPI(title="Local LLM Model Manager", lifespan=lifespan)
 
 # --- API ENDPOINTS ---
 @app.get("/")
-async def serve_ui():
-    return FileResponse("index.html")
+async def serve_ui(): return FileResponse("index.html")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
-        while True: await websocket.receive_text() # Keep connection alive
+        while True: await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -214,35 +270,31 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     needs_download = req.symlink_name not in state or state[req.symlink_name]["repo"] != req.hf_repo or state[req.symlink_name]["quant"] != req.quant
 
     warning_msg = ""
-    model_size = 0
-    
     if needs_download:
-        # Pre-flight Storage Check
         os.makedirs(CACHE_DIR, exist_ok=True)
         try:
             api = HfApi(token=os.environ.get("HF_TOKEN"))
             info = api.model_info(req.hf_repo)
             model_size = sum(f.size for f in info.siblings if fnmatch.fnmatch(f.rfilename, f"*{req.quant}*") and f.size)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch model info from Hugging Face: {e}")
+            raise HTTPException(status_code=400, detail=f"API Error: {e}")
 
         total, used, free = shutil.disk_usage(CACHE_DIR)
         
         if model_size > free:
-            raise HTTPException(status_code=400, detail=f"Storage Check Failed. Model requires {format_bytes(model_size)}, but only {format_bytes(free)} is available.")
+            raise HTTPException(status_code=400, detail=f"Insufficient Storage. Model requires {format_bytes(model_size)}, but only {format_bytes(free)} is available.")
             
         if (used + model_size) / total > 0.8:
-            warning_msg = f" (Warning: This download will push your disk usage above 80%)"
+            warning_msg = f" (Warning: This will push disk usage above 80%)"
 
     state[req.symlink_name] = {
         "repo": req.hf_repo, "quant": req.quant, "params": params_dict,
         "status": "downloading" if needs_download else "ready",
-        "expected_size": model_size
     }
     save_state(state)
 
     if needs_download:
-        background_tasks.add_task(process_model, req, params_dict, model_size)
+        background_tasks.add_task(process_model, req, params_dict)
         return {"status": f"Provisioning started.{warning_msg}"}
     else:
         sync_system(state)

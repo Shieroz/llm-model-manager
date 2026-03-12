@@ -2,4 +2,5 @@ fastapi
 uvicorn
 pydantic
 websockets
-huggingface_hub[hf_transfer]
+aiofiles
+huggingface_hub[cli,hf_transfer]

@@ -12,8 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Force Hugging Face to use the Rust-based hf_transfer library globally
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-# Copy your app.py containing the FastAPI backend and Web UI
+# Copy your app.py containing the FastAPI backend and the index.html for the Web UI
 COPY app.py .
+COPY index.html .
 
 # Expose the port for the Web UI
 EXPOSE 8000

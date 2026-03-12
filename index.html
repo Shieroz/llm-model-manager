@@ -36,17 +36,13 @@
     <script>
         let currentConfigs = [];
         let expandedConfigs = new Set();
-        let ws;
 
         // --- WEBSOCKET CONNECTION ---
         function connectWS() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+            const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
             
-            ws.onopen = () => {
-                document.getElementById('wsStatus').innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Live Sync Active';
-            };
-            
+            ws.onopen = () => document.getElementById('wsStatus').innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Live Sync Active';
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'update') {
@@ -54,28 +50,12 @@
                     renderConfigs();
                 }
             };
-            
             ws.onclose = () => {
                 document.getElementById('wsStatus').innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span> Disconnected. Retrying...';
                 setTimeout(connectWS, 2000);
             };
         }
-        
-        connectWS(); // Initialize
-
-        // --- FORMATTING UTILS ---
-        function formatBytes(bytes) {
-            if (!+bytes) return '0 B';
-            const k = 1024, dm = 2, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-        }
-        function formatTime(sec) {
-            if (!sec || sec === Infinity) return '--:--';
-            sec = Math.round(sec);
-            const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-            return `${h > 0 ? h + 'h ' : ''}${m}m ${s}s`;
-        }
+        connectWS();
 
         function toggleDetails(name) {
             if (expandedConfigs.has(name)) expandedConfigs.delete(name);
@@ -98,9 +78,8 @@
 
                 if (isDownloading) {
                     statusBadge = `<span class="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded border border-yellow-700 animate-pulse">Downloading...</span>`;
-                    if (conf.progress) {
-                        const p = conf.progress;
-                        const percent = p.total > 0 ? Math.min(100, (p.downloaded / p.total) * 100).toFixed(1) : 0;
+                    if (conf.progress_str) {
+                        const p = conf.progress_str;
                         const isExpanded = expandedConfigs.has(conf.name);
                         
                         progressUI = `
@@ -108,17 +87,17 @@
                                 <div class="flex justify-between items-center cursor-pointer hover:text-white text-gray-400 transition" onclick="toggleDetails('${conf.name}')">
                                     <div class="flex-1 mr-4">
                                         <div class="h-2 bg-gray-700 rounded-full overflow-hidden w-full">
-                                            <div class="h-full bg-yellow-500 transition-all duration-1000 ease-linear" style="width: ${percent}%"></div>
+                                            <div class="h-full bg-yellow-500 transition-all duration-300 ease-linear" style="width: ${p.percent}%"></div>
                                         </div>
                                     </div>
-                                    <span class="text-xs font-mono text-yellow-500 whitespace-nowrap">${percent}% ${isExpanded ? '▲' : '▼'}</span>
+                                    <span class="text-xs font-mono text-yellow-500 whitespace-nowrap">${p.percent}% ${isExpanded ? '▲' : '▼'}</span>
                                 </div>
                                 ${isExpanded ? `
                                 <div class="mt-3 grid grid-cols-2 gap-2 text-xs font-mono text-gray-400 bg-gray-900 p-3 rounded border border-gray-700">
-                                    <div>Progress: <span class="text-gray-200">${formatBytes(p.downloaded)} / ${p.total > 0 ? formatBytes(p.total) : 'Unknown'}</span></div>
-                                    <div>Files: <span class="text-gray-200">Parallel chunks</span></div>
-                                    <div>Speed: <span class="text-blue-400">${formatBytes(p.speed)}/s</span></div>
-                                    <div>ETA: <span class="text-yellow-400">${formatTime(p.eta)}</span></div>
+                                    <div>Progress: <span class="text-gray-200">${p.downloaded} / ${p.total}</span></div>
+                                    <div>Files: <span class="text-gray-200">Parallel chunks (hf_transfer)</span></div>
+                                    <div>Speed: <span class="text-blue-400">${p.speed}</span></div>
+                                    <div>ETA: <span class="text-yellow-400">${p.eta}</span></div>
                                 </div>
                                 ` : ''}
                             </div>
@@ -136,7 +115,7 @@
                 
                 let buttons = '';
                 if (!isDownloading && isError) {
-                     buttons = `<p class="text-xs text-red-400 mb-2">${conf.error_msg || "Download failed"}</p>
+                     buttons = `<p class="text-xs text-red-400 mb-2 truncate max-w-[150px] cursor-help" title="${conf.error_msg}">${conf.error_msg || "Download failed"}</p>
                                 <div class="flex gap-2">
                                     <button onclick="editConfig('${conf.name}')" class="bg-yellow-600 hover:bg-yellow-500 text-white text-xs py-1 px-3 rounded w-full">Edit</button>
                                     <button onclick="deleteConfig('${conf.name}')" class="bg-red-600 hover:bg-red-500 text-white text-xs py-1 px-3 rounded w-full">Delete</button>
@@ -152,13 +131,13 @@
 
                 card.innerHTML = `
                     <div class="flex justify-between items-start">
-                        <div class="flex-1">
-                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                                ${conf.name}
+                        <div class="flex-1 min-w-0">
+                            <h3 class="text-lg font-bold text-white flex flex-wrap items-center gap-2">
+                                <span class="truncate">${conf.name}</span>
                                 <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded border border-blue-700 font-mono tracking-wider">${conf.quant}</span>
                                 ${statusBadge}
                             </h3>
-                            <p class="text-xs text-gray-500 mb-3 font-mono mt-1">Repo: ${conf.repo}</p>
+                            <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${conf.repo}</p>
                             <div class="flex flex-wrap mt-2">${paramsHtml}</div>
                         </div>
                         ${buttons}
@@ -242,7 +221,6 @@
             const data = await res.json();
             
             if(res.ok) {
-                // If it contains "Warning", render it yellow, else green
                 const isWarning = data.status.includes('Warning');
                 status.className = `text-sm mt-2 ${isWarning ? 'text-yellow-400 font-bold' : 'text-green-400'} block`;
                 status.textContent = data.status;
