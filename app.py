@@ -92,6 +92,10 @@ def process_model(req: ModelSetup, params_dict: dict):
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
+    req.symlink_name = req.symlink_name.replace("/", "-")
+    if req.original_name:
+        req.original_name = req.original_name.replace("/", "-")
+
     try:
         params_dict = json.loads(req.parameters) if req.parameters.strip() else {}
     except Exception as e:
