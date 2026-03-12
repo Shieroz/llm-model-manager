@@ -7,6 +7,7 @@ import subprocess
 import threading
 import fnmatch
 import os
+import sys
 import glob
 import configparser
 import json
@@ -14,7 +15,6 @@ import shutil
 import asyncio
 import pty
 import re
-import sys
 import time
 
 CACHE_DIR = "/models/.cache"
@@ -102,8 +102,6 @@ manager = ConnectionManager()
 
 # --- PTY SUBPROCESS WRAPPER ---
 def process_model(req: ModelSetup, params_dict: dict):
-    # 1. Write an inline Python script to execute the download natively.
-    # This completely bypasses the missing CLI binary and internal module paths.
     script_code = f"""
 import os
 os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
@@ -117,17 +115,12 @@ snapshot_download(
 """
     os.makedirs(CACHE_DIR, exist_ok=True)
     script_path = os.path.join(CACHE_DIR, f"dl_{req.symlink_name}.py")
-    with open(script_path, "w") as f:
-        f.write(script_code)
+    with open(script_path, "w") as f: f.write(script_code)
 
-    # 2. Execute the script using the exact same Python interpreter
     cmd = [sys.executable, script_path]
-
     master, slave = pty.openpty()
     env = os.environ.copy()
     env["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-    
-    # CRITICAL: Pass the active Python path so the subprocess easily finds huggingface_hub
     env["PYTHONPATH"] = os.pathsep.join(sys.path)
 
     try:
@@ -138,8 +131,7 @@ snapshot_download(
             state[req.symlink_name]["status"] = "error"
             state[req.symlink_name]["error_msg"] = f"Subprocess failed: {e}"[:120]
             save_state(state)
-        os.close(slave)
-        os.close(master)
+        os.close(slave); os.close(master)
         return
 
     os.close(slave)
@@ -150,23 +142,16 @@ snapshot_download(
     
     while True:
         try:
-            # 1. The Sleep Throttle: Let the pipe fill up so we aren't doing 1,000 syscalls a second
-            time.sleep(0.05)
-            
-            # 2. The Big Gulp: Read 8x more data at once to drain the buffer instantly
-            data = os.read(master, 8192).decode('utf-8', errors='replace')
+            data = os.read(master, 32768).decode('utf-8', errors='replace')
             if not data: break
             buffer += data
             if len(error_log) < 100: error_log.append(data)
 
             now = time.time()
-            
-            # 3. The UI Throttle: Only do the heavy Regex and JSON saving twice a second
             if now - last_ui_update > 0.5:
                 lines = buffer.replace('\r', '\n').split('\n')
-                buffer = lines.pop() # Keep the last incomplete chunk
+                buffer = lines.pop()
 
-                # 4. The Skim: Read the buffer BACKWARDS. We only care about the newest progress!
                 for line in reversed(lines):
                     clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', line)
                     data_m = re.search(r'([0-9.]+[A-Za-z]?B?)\s*/\s*([0-9.]+[A-Za-z]?B?)', clean_line, re.IGNORECASE)
@@ -193,14 +178,12 @@ snapshot_download(
                             save_state(state)
                         
                         last_ui_update = now
-                        break # Success! We found the newest frame. Ignore the rest of the buffer.
-
-        except OSError:
-            break # PTY closed
+                        break 
+        except OSError: break
 
     process.wait()
     os.close(master)
-    try: os.unlink(script_path) # Clean up the temp script
+    try: os.unlink(script_path) 
     except: pass
 
     state = load_state()
@@ -214,8 +197,6 @@ snapshot_download(
         if req.symlink_name in state:
             state[req.symlink_name]["status"] = "error"
             err_text = "".join(error_log[-10:]).replace('\n', ' ')
-            
-            # Smart Extraction: Pulls out just the exact Python Exception so it fits cleanly on the UI card
             exc_match = re.search(r'([A-Za-z]+Error:.*)', err_text)
             final_err = exc_match.group(1) if exc_match else err_text
             state[req.symlink_name]["error_msg"] = f"Failed: {final_err}"[:120]
@@ -254,6 +235,23 @@ async def websocket_endpoint(websocket: WebSocket):
         while True: await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+@app.get("/api/quants")
+async def get_quants(repo: str):
+    """Scans a HF repo for .gguf files and extracts their quantization tags."""
+    try:
+        api = HfApi(token=os.environ.get("HF_TOKEN"))
+        info = api.model_info(repo)
+        quants = set()
+        for f in info.siblings:
+            if not f.rfilename.endswith(".gguf"): continue
+            # Extracts standard quant markers (e.g. Q4_K_M, UD-Q4_K_XL, IQ3_XXS)
+            match = re.search(r'((?:UD-)?(?:I)?Q\d[A-Z0-9_]*)', f.rfilename, re.IGNORECASE)
+            if match:
+                quants.add(match.group(1).upper())
+        return {"quants": sorted(list(quants))}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):

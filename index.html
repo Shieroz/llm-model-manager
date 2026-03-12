@@ -6,17 +6,45 @@
     <title>LLM Config Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config = { darkMode: 'class' }</script>
+    <style>
+        /* Custom scrollbar for dark mode */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        .config-card { transition: all 0.2s ease-in-out; }
+    </style>
 </head>
 <body class="bg-gray-900 text-gray-100 p-8 font-sans">
-    <div class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8">
+    <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8">
+        
         <div class="md:col-span-5 bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 h-fit sticky top-8">
             <h2 id="formTitle" class="text-2xl font-bold mb-4 text-blue-400">Deploy New Config</h2>
             <form id="setupForm" class="space-y-4">
                 <input type="hidden" id="original_name" value="">
-                <div><label class="block text-sm text-gray-400">HF Repo *</label><input type="text" id="hf_repo" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500"></div>
-                <div><label class="block text-sm text-gray-400">Quantization *</label><input type="text" id="quant" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500"></div>
-                <div><label class="block text-sm text-gray-400">Symlink Name *</label><input type="text" id="symlink_name" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500"></div>
-                <div><label class="block text-sm text-gray-400">Parameters (JSON) *</label><textarea id="parameters" required rows="8" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm">{"temp": 0.6}</textarea></div>
+                
+                <div>
+                    <label class="block text-sm text-gray-400">HF Repo *</label>
+                    <input type="text" id="hf_repo" placeholder="unsloth/Qwen3.5-0.8B-GGUF" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                </div>
+                
+                <div>
+                    <label class="block text-sm text-gray-400">Quantization *</label>
+                    <select id="quant" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500 disabled:opacity-50">
+                        <option value="">Paste repo above to load quants...</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-sm text-gray-400">Symlink Name *</label>
+                    <input type="text" id="symlink_name" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                </div>
+                
+                <div>
+                    <label class="block text-sm text-gray-400">Parameters (JSON) *</label>
+                    <textarea id="parameters" required rows="8" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm">{"temp": 0.6}</textarea>
+                </div>
+                
                 <div class="flex gap-2">
                     <button type="submit" id="submitBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">Provision Model</button>
                     <button type="button" id="clearBtn" onclick="resetForm()" class="bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition">Clear</button>
@@ -24,18 +52,27 @@
                 <p id="statusMsg" class="text-sm mt-2 hidden"></p>
             </form>
         </div>
-        <div class="md:col-span-7">
-            <div class="flex justify-between items-end mb-4">
+
+        <div class="md:col-span-7 flex flex-col h-[calc(100vh-4rem)]">
+            
+            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-4 gap-4">
                 <h2 class="text-2xl font-bold text-green-400">Active Configurations</h2>
-                <span id="wsStatus" class="text-xs text-gray-500 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Connecting...</span>
+                
+                <div class="flex items-center gap-4 w-full sm:w-auto">
+                    <input type="text" id="configSearch" oninput="filterConfigs()" placeholder="Search models..." class="w-full sm:w-64 bg-gray-900 border border-gray-700 rounded p-1.5 text-sm text-white focus:ring-blue-500 placeholder-gray-500">
+                    <span id="wsStatus" class="text-xs text-gray-500 flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Connecting...</span>
+                </div>
             </div>
-            <div id="configList" class="space-y-4"></div>
+            
+            <div id="configList" class="space-y-4 overflow-y-auto pr-2 pb-8 custom-scrollbar flex-1">
+                </div>
         </div>
     </div>
 
     <script>
         let currentConfigs = [];
         let expandedConfigs = new Set();
+        let repoDebounceTimer;
 
         // --- WEBSOCKET CONNECTION ---
         function connectWS() {
@@ -48,6 +85,7 @@
                 if (msg.type === 'update') {
                     currentConfigs = msg.data;
                     renderConfigs();
+                    filterConfigs(); // Maintain search filter on updates
                 }
             };
             ws.onclose = () => {
@@ -57,10 +95,77 @@
         }
         connectWS();
 
+        // --- REPO AUTO-FETCH LOGIC ---
+        document.getElementById('hf_repo').addEventListener('input', function(e) {
+            clearTimeout(repoDebounceTimer);
+            const repo = e.target.value.trim();
+            if (repo.includes('/')) {
+                repoDebounceTimer = setTimeout(() => fetchQuants(repo, true), 800);
+            }
+        });
+
+        async function fetchQuants(repo, autoFillSymlink = false) {
+            const quantSelect = document.getElementById('quant');
+            const symInput = document.getElementById('symlink_name');
+            
+            // Auto-populate symlink name from repo if requested and field is empty
+            if (autoFillSymlink && !symInput.value) {
+                symInput.value = repo.split('/').pop().replace('.gguf', '').replace('.GGUF', '');
+            }
+
+            quantSelect.innerHTML = '<option value="">Scanning Hugging Face...</option>';
+            quantSelect.disabled = true;
+
+            try {
+                const res = await fetch(`/api/quants?repo=${encodeURIComponent(repo)}`);
+                if (!res.ok) throw new Error("Repo not found");
+                const data = await res.json();
+                
+                if (data.quants.length === 0) {
+                    quantSelect.innerHTML = '<option value="">No GGUF quants found</option>';
+                    return;
+                }
+
+                quantSelect.innerHTML = '';
+                let bestQ4 = '';
+                
+                data.quants.forEach(q => {
+                    const opt = document.createElement('option');
+                    opt.value = q;
+                    opt.textContent = q;
+                    quantSelect.appendChild(opt);
+                    
+                    // Smart Default: Find the "largest" 4-bit quant (e.g., UD-Q4_K_XL, Q4_K_M)
+                    if (q.includes('Q4')) {
+                        if (!bestQ4 || q.length > bestQ4.length || q.includes('XL') || q.includes('L')) {
+                            bestQ4 = q;
+                        }
+                    }
+                });
+
+                // Fallback to the first item if no Q4 exists
+                quantSelect.value = bestQ4 || data.quants[0];
+                quantSelect.disabled = false;
+            } catch (e) {
+                quantSelect.innerHTML = '<option value="">Error fetching repo</option>';
+            }
+        }
+
+        // --- UI RENDER & FILTER LOGIC ---
+        function filterConfigs() {
+            const term = document.getElementById('configSearch').value.toLowerCase();
+            const cards = document.querySelectorAll('.config-card');
+            cards.forEach(card => {
+                const text = card.textContent.toLowerCase();
+                card.style.display = text.includes(term) ? '' : 'none';
+            });
+        }
+
         function toggleDetails(name) {
             if (expandedConfigs.has(name)) expandedConfigs.delete(name);
             else expandedConfigs.add(name);
             renderConfigs();
+            filterConfigs();
         }
 
         function renderConfigs() {
@@ -72,6 +177,8 @@
                 const isDownloading = conf.status === 'downloading';
                 const isError = conf.status === 'error';
                 const card = document.createElement('div');
+                card.className = `config-card bg-gray-800 p-4 rounded-lg shadow border ${isDownloading ? 'border-yellow-600' : isError ? 'border-red-600' : 'border-gray-700 hover:border-blue-500'} flex flex-col`;
+                card.dataset.name = conf.name;
                 
                 let statusBadge = '';
                 let progressUI = '';
@@ -82,6 +189,7 @@
                         const p = conf.progress_str;
                         const isExpanded = expandedConfigs.has(conf.name);
                         
+                        // Removed static "Files" field
                         progressUI = `
                             <div class="mt-3 border-t border-gray-700 pt-3">
                                 <div class="flex justify-between items-center cursor-pointer hover:text-white text-gray-400 transition" onclick="toggleDetails('${conf.name}')">
@@ -93,10 +201,9 @@
                                     <span class="text-xs font-mono text-yellow-500 whitespace-nowrap">${p.percent}% ${isExpanded ? '▲' : '▼'}</span>
                                 </div>
                                 ${isExpanded ? `
-                                <div class="mt-3 grid grid-cols-2 gap-2 text-xs font-mono text-gray-400 bg-gray-900 p-3 rounded border border-gray-700">
-                                    <div>Progress: <span class="text-gray-200">${p.downloaded} / ${p.total}</span></div>
-                                    <div>Files: <span class="text-gray-200">Parallel chunks (hf_transfer)</span></div>
-                                    <div>Speed: <span class="text-blue-400">${p.speed}</span></div>
+                                <div class="mt-3 flex justify-between text-xs font-mono text-gray-400 bg-gray-900 p-3 rounded border border-gray-700">
+                                    <div>Prog: <span class="text-gray-200">${p.downloaded} / ${p.total}</span></div>
+                                    <div>Spd: <span class="text-blue-400">${p.speed}</span></div>
                                     <div>ETA: <span class="text-yellow-400">${p.eta}</span></div>
                                 </div>
                                 ` : ''}
@@ -110,8 +217,6 @@
                 const paramsHtml = Object.entries(conf.params).map(([k, v]) => 
                     `<span class="bg-gray-900 border border-gray-600 text-xs px-2 py-1 rounded mr-1 mb-1 inline-block"><span class="text-blue-300">${k}:</span> <span class="font-mono text-gray-300">${typeof v === 'object' ? JSON.stringify(v) : v}</span></span>`
                 ).join('');
-
-                card.className = `bg-gray-800 p-4 rounded-lg shadow border ${isDownloading ? 'border-yellow-600' : isError ? 'border-red-600' : 'border-gray-700 hover:border-blue-500'} transition duration-200 flex flex-col`;
                 
                 let buttons = '';
                 if (!isDownloading && isError) {
@@ -148,14 +253,17 @@
             });
         }
 
-        function duplicateConfig(name) {
+        async function duplicateConfig(name) {
             const conf = currentConfigs.find(c => c.name === name);
             if(!conf) return;
             resetForm();
             document.getElementById('formTitle').textContent = `Duplicate Config: ${name}`;
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-green-400";
+            
             document.getElementById('hf_repo').value = conf.repo;
+            await fetchQuants(conf.repo, false); // Fetch quants but don't overwrite symlink
             document.getElementById('quant').value = conf.quant;
+            
             document.getElementById('symlink_name').value = conf.name + "-COPY";
             document.getElementById('submitBtn').textContent = "Provision Duplicate";
             document.getElementById('submitBtn').className = "flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded transition";
@@ -164,13 +272,16 @@
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        function editConfig(name) {
+        async function editConfig(name) {
             const conf = currentConfigs.find(c => c.name === name);
             if(!conf) return;
             document.getElementById('formTitle').textContent = `Edit Config: ${name}`;
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-yellow-400";
+            
             document.getElementById('hf_repo').value = conf.repo;
+            await fetchQuants(conf.repo, false); // Fetch quants but don't overwrite symlink
             document.getElementById('quant').value = conf.quant;
+            
             document.getElementById('symlink_name').value = conf.name;
             document.getElementById('original_name').value = conf.name;
             document.getElementById('submitBtn').textContent = "Update Config";
@@ -186,11 +297,17 @@
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-blue-400";
             document.getElementById('setupForm').reset();
             document.getElementById('original_name').value = ''; 
+            
+            document.getElementById('quant').innerHTML = '<option value="">Paste repo above to load quants...</option>';
+            document.getElementById('quant').disabled = true;
+
             document.getElementById('submitBtn').textContent = "Provision Model";
             document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition";
             document.getElementById('clearBtn').textContent = "Clear";
             document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
-            document.getElementById('parameters').value = '{\\n  "temp": 0.6,\\n  "top-p": 0.95\\n}';
+            
+            // FIXED ESCAPING BUG
+            document.getElementById('parameters').value = '{\n  "temp": 0.6,\n  "top-p": 0.95\n}';
             document.getElementById('statusMsg').className = "hidden";
         }
 
