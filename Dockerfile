@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Git is required for some Hugging Face hub operations
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

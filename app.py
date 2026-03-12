@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from huggingface_hub import snapshot_download
 from pydantic import BaseModel
+import subprocess
 import os
 import glob
 import configparser
@@ -14,13 +15,26 @@ SERVED_DIR = "/models/served"
 INI_PATH = os.path.join(SERVED_DIR, "models.ini")
 
 class ModelSetup(BaseModel):
-    hf_repo: str = ""             # Now optional for edits
-    quant: str = ""               # Now optional for edits
-    symlink_name: str             
-    parameters: str 
+    hf_repo: str = ""
+    quant: str = ""
+    symlink_name: str
+    original_name: str = ""       # Tracks the old name during a rename operation
+    parameters: str
+
+def restart_llama_container():
+    """Dynamically restarts the target container using the compose environment variable."""
+    container_name = os.environ.get("LLAMA_CONTAINER_NAME", "llama-cpp")
+    print(f"Restarting {container_name} to apply changes...")
+    try:
+        subprocess.run([
+            "curl", "-s", "--unix-socket", "/var/run/docker.sock", 
+            "-X", "POST", f"http://localhost/containers/{container_name}/restart"
+        ], check=True)
+        print(f"{container_name} restarted successfully.")
+    except Exception as e:
+        print(f"Failed to restart {container_name}: {e}")
 
 def write_to_ini(symlink_name: str, params_dict: dict):
-    """Safely writes parameters to INI, adding the critical 'model' path."""
     os.makedirs(SERVED_DIR, exist_ok=True)
     config = configparser.ConfigParser()
     config.optionxform = str 
@@ -28,18 +42,15 @@ def write_to_ini(symlink_name: str, params_dict: dict):
     if os.path.exists(INI_PATH):
         config.read(INI_PATH)
     
-    # 1. Clean the UI name (no .gguf suffix)
     section_name = symlink_name 
     
     if config.has_section(section_name):
         config.remove_section(section_name)
     config.add_section(section_name)
     
-    # 2. Tell llama-server exactly where the physical file is
     symlink_path = os.path.join(SERVED_DIR, f"{symlink_name}.gguf")
     config.set(section_name, "model", symlink_path)
     
-    # 3. Write the rest of the JSON parameters
     for key, value in params_dict.items():
         if isinstance(value, (dict, list)):
             config.set(section_name, key, json.dumps(value))
@@ -55,7 +66,7 @@ def process_model(req: ModelSetup, params_dict: dict):
     os.makedirs(CACHE_DIR, exist_ok=True)
     os.makedirs(SERVED_DIR, exist_ok=True)
 
-    print(f"Checking cache or downloading {req.hf_repo} ({req.quant})...")
+    print(f"Downloading {req.hf_repo} ({req.quant})...")
     snapshot_download(
         repo_id=req.hf_repo,
         allow_patterns=f"*{req.quant}*",
@@ -77,46 +88,70 @@ def process_model(req: ModelSetup, params_dict: dict):
 
     write_to_ini(req.symlink_name, params_dict)
     print(f"Successfully provisioned: {req.symlink_name}")
+    restart_llama_container()
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     try:
         params_dict = json.loads(req.parameters) if req.parameters.strip() else {}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON parameters: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
         
-    # If repo and quant are provided, do the full download pipeline
+    # If repo is provided, it's a new download/provision
     if req.hf_repo and req.quant:
         background_tasks.add_task(process_model, req, params_dict)
-        return {"status": "Provisioning in background. This may take a while if downloading."}
+        return {"status": "Provisioning in background. Container will restart when finished."}
     
-    # If no repo provided, assume it's a parameter edit to an existing config
-    symlink_path = os.path.join(SERVED_DIR, f"{req.symlink_name}.gguf")
-    if not os.path.exists(symlink_path):
-        raise HTTPException(status_code=404, detail="Cannot edit params: Symlink does not exist.")
+    # --- EDIT MODE ---
+    target_name = req.symlink_name
+    old_name = req.original_name
+    
+    # Handle Renaming
+    if old_name and old_name != target_name:
+        old_symlink_path = os.path.join(SERVED_DIR, f"{old_name}.gguf")
+        new_symlink_path = os.path.join(SERVED_DIR, f"{target_name}.gguf")
         
-    write_to_ini(req.symlink_name, params_dict)
-    return {"status": "Config parameters updated instantly!"}
+        if not os.path.islink(old_symlink_path):
+            raise HTTPException(status_code=404, detail="Original symlink not found for renaming.")
+            
+        target_file = os.readlink(old_symlink_path)
+        
+        if os.path.exists(new_symlink_path) or os.path.islink(new_symlink_path):
+            os.unlink(new_symlink_path)
+        os.symlink(target_file, new_symlink_path)
+        
+        os.unlink(old_symlink_path)
+        
+        config = configparser.ConfigParser()
+        config.optionxform = str
+        if os.path.exists(INI_PATH):
+            config.read(INI_PATH)
+            if config.has_section(old_name):
+                config.remove_section(old_name)
+                with open(INI_PATH, 'w') as configfile:
+                    config.write(configfile)
+    else:
+        # Standard Edit (No Rename)
+        symlink_path = os.path.join(SERVED_DIR, f"{target_name}.gguf")
+        if not os.path.exists(symlink_path):
+            raise HTTPException(status_code=404, detail="Symlink does not exist.")
+            
+    write_to_ini(target_name, params_dict)
+    restart_llama_container()
+    return {"status": "Config updated and container restarted!"}
 
 @app.get("/api/configs")
 async def get_configs():
     config = configparser.ConfigParser()
     config.optionxform = str
-    
     if os.path.exists(INI_PATH):
         config.read(INI_PATH)
     
     configs = []
     for section in config.sections():
         params = dict(config.items(section))
-        # Remove the 'model' path from the UI parameter display
         file_path = params.pop("model", f"{section}.gguf") 
-        
-        configs.append({
-            "name": section,
-            "file": file_path,
-            "params": params
-        })
+        configs.append({"name": section, "file": file_path, "params": params})
     return configs
 
 @app.delete("/api/configs/{symlink_name}")
@@ -131,12 +166,13 @@ async def delete_config(symlink_name: str):
     config.optionxform = str
     if os.path.exists(INI_PATH):
         config.read(INI_PATH)
-        if config.has_section(file_name):
-            config.remove_section(file_name)
+        if config.has_section(symlink_name):
+            config.remove_section(symlink_name)
             with open(INI_PATH, 'w') as configfile:
                 config.write(configfile)
                 
-    return {"status": "Config deleted"}
+    restart_llama_container()
+    return {"status": "Config deleted and container restarted!"}
 
 # --- FRONTEND WEB UI ---
 @app.get("/", response_class=HTMLResponse)
@@ -157,6 +193,7 @@ async def serve_ui():
             <div class="md:col-span-5 bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 h-fit sticky top-8">
                 <h2 id="formTitle" class="text-2xl font-bold mb-4 text-blue-400">Deploy New Config</h2>
                 <form id="setupForm" class="space-y-4">
+                    <input type="hidden" id="original_name" value="">
                     <div>
                         <label class="block text-sm font-medium text-gray-400">HF Repo <span class="text-xs text-gray-500">(Leave blank to edit existing)</span></label>
                         <input type="text" id="hf_repo" class="mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500">
@@ -192,8 +229,7 @@ async def serve_ui():
                         <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Auto-Sync Active
                     </span>
                 </div>
-                <div id="configList" class="space-y-4">
-                    </div>
+                <div id="configList" class="space-y-4"></div>
             </div>
         </div>
 
@@ -211,20 +247,16 @@ async def serve_ui():
             function renderConfigs() {
                 const list = document.getElementById('configList');
                 list.innerHTML = '';
-                
                 if (currentConfigs.length === 0) {
                     list.innerHTML = '<p class="text-gray-500 italic">No configurations currently active.</p>';
                     return;
                 }
-
                 currentConfigs.forEach(conf => {
                     const card = document.createElement('div');
                     card.className = "bg-gray-800 p-4 rounded-lg shadow border border-gray-700 flex justify-between items-start hover:border-blue-500 transition duration-200";
-                    
                     const paramsHtml = Object.entries(conf.params)
                         .map(([k, v]) => `<span class="bg-gray-900 border border-gray-600 text-xs px-2 py-1 rounded mr-1 mb-1 inline-block"><span class="text-blue-300">${k}:</span> <span class="font-mono text-gray-300">${v}</span></span>`)
                         .join('');
-
                     card.innerHTML = `
                         <div class="flex-1">
                             <h3 class="text-lg font-bold text-white">${conf.name}</h3>
@@ -244,26 +276,23 @@ async def serve_ui():
                 const conf = currentConfigs.find(c => c.name === name);
                 if(!conf) return;
                 
-                // Set form state for editing
                 document.getElementById('formTitle').textContent = `Edit Config: ${name}`;
                 document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-yellow-400";
                 document.getElementById('hf_repo').value = '';
                 document.getElementById('quant').value = '';
                 document.getElementById('symlink_name').value = conf.name;
-                document.getElementById('symlink_name').readOnly = true;
-                document.getElementById('symlink_name').className = "mt-1 w-full bg-gray-600 border border-gray-500 rounded p-2 text-gray-300 cursor-not-allowed";
+                document.getElementById('original_name').value = conf.name; // Track the original name
+                
                 document.getElementById('submitBtn').textContent = "Update Parameters";
                 document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition";
+                
                 document.getElementById('clearBtn').textContent = "Cancel Edit";
                 document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition";
                 
-                // Intelligently reconstruct the JSON for the textarea
                 let paramsObj = {};
                 for (let [k, v] of Object.entries(conf.params)) {
-                    try { 
-                        paramsObj[k] = JSON.parse(v); 
-                    } catch(e) { 
-                        // Fallback for primitive types that aren't valid JSON strings on their own
+                    try { paramsObj[k] = JSON.parse(v); } 
+                    catch(e) { 
                         if (!isNaN(v) && v.trim() !== '') paramsObj[k] = Number(v);
                         else if (v.toLowerCase() === 'true') paramsObj[k] = true;
                         else if (v.toLowerCase() === 'false') paramsObj[k] = false;
@@ -278,21 +307,23 @@ async def serve_ui():
                 document.getElementById('formTitle').textContent = "Deploy New Config";
                 document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-blue-400";
                 document.getElementById('setupForm').reset();
-                document.getElementById('symlink_name').readOnly = false;
-                document.getElementById('symlink_name').className = "mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500";
+                document.getElementById('original_name').value = ''; // Clear tracker
+                
                 document.getElementById('submitBtn').textContent = "Provision Model";
                 document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition";
-                document.getElementById('parameters').value = '{\\n  "temp": 0.6,\\n  "top_p": 0.95\\n}';
-                document.getElementById('statusMsg').className = "hidden";
+                
                 document.getElementById('clearBtn').textContent = "Clear";
                 document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
+                
+                document.getElementById('parameters').value = '{\\n  "temp": 0.6,\\n  "top-p": 0.95\\n}';
+                document.getElementById('statusMsg').className = "hidden";
             }
 
             async function deleteConfig(name) {
                 if(confirm(`Delete the ${name} config? (Model files remain safely cached)`)) {
                     await fetch(`/api/configs/${name}`, { method: 'DELETE' });
                     loadConfigs();
-                    if(document.getElementById('symlink_name').value === name) resetForm();
+                    if(document.getElementById('original_name').value === name) resetForm();
                 }
             }
 
@@ -310,6 +341,7 @@ async def serve_ui():
                     hf_repo: document.getElementById('hf_repo').value,
                     quant: document.getElementById('quant').value,
                     symlink_name: document.getElementById('symlink_name').value,
+                    original_name: document.getElementById('original_name').value,
                     parameters: document.getElementById('parameters').value
                 };
 
@@ -325,20 +357,19 @@ async def serve_ui():
                     status.className = "text-sm mt-2 text-green-400 block";
                     status.textContent = data.status;
                     setTimeout(() => { 
-                        if(!document.getElementById('symlink_name').readOnly) resetForm(); 
+                        resetForm(); 
                         btn.disabled = false; 
                         btn.classList.remove('opacity-50'); 
                     }, 2000);
                     loadConfigs();
                 } else {
                     status.className = "text-sm mt-2 text-red-400 block";
-                    status.textContent = "Error: " + (data.detail || "Invalid setup parameters");
+                    status.textContent = "Error: " + (data.detail || "Invalid parameters");
                     btn.disabled = false; 
                     btn.classList.remove('opacity-50');
                 }
             });
 
-            // Initial load and start 3-second polling
             loadConfigs();
             setInterval(loadConfigs, 3000);
         </script>

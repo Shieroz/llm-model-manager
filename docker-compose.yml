@@ -6,10 +6,13 @@ services:
     image: local/llm-model-manager:latest
     container_name: llm-model-manager
     restart: unless-stopped
+    environment:
+      - LLAMA_CONTAINER_NAME=llama-cpp
     ports:
       - "8000:8000"
     volumes:
       - ${MODELS}:/models
+      - /var/run/docker.sock:/var/run/docker.sock
 
   llama-cpp:
     image: ghcr.io/ggml-org/llama.cpp:full-cuda
