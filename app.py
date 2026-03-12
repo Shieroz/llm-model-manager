@@ -242,7 +242,10 @@ async def serve_ui():
                     const card = document.createElement('div');
                     card.className = "bg-gray-800 p-4 rounded-lg shadow border border-gray-700 flex justify-between items-start hover:border-blue-500 transition duration-200";
                     const paramsHtml = Object.entries(conf.params)
-                        .map(([k, v]) => `<span class="bg-gray-900 border border-gray-600 text-xs px-2 py-1 rounded mr-1 mb-1 inline-block"><span class="text-blue-300">${k}:</span> <span class="font-mono text-gray-300">${v}</span></span>`)
+                        .map(([k, v]) => {
+                            const displayVal = typeof v === 'object' ? JSON.stringify(v) : v;
+                            return `<span class="bg-gray-900 border border-gray-600 text-xs px-2 py-1 rounded mr-1 mb-1 inline-block"><span class="text-blue-300">${k}:</span> <span class="font-mono text-gray-300">${displayVal}</span></span>`;
+                        })
                         .join('');
                     card.innerHTML = `
                         <div class="flex-1">
@@ -281,17 +284,7 @@ async def serve_ui():
                 document.getElementById('clearBtn').textContent = "Cancel Edit";
                 document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition";
                 
-                let paramsObj = {};
-                for (let [k, v] of Object.entries(conf.params)) {
-                    try { paramsObj[k] = JSON.parse(v); } 
-                    catch(e) { 
-                        if (!isNaN(v) && v.trim() !== '') paramsObj[k] = Number(v);
-                        else if (v.toLowerCase() === 'true') paramsObj[k] = true;
-                        else if (v.toLowerCase() === 'false') paramsObj[k] = false;
-                        else paramsObj[k] = v; 
-                    }
-                }
-                document.getElementById('parameters').value = JSON.stringify(paramsObj, null, 2);
+                document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
