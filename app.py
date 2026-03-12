@@ -269,7 +269,7 @@ async def get_quants(repo: str):
     """Scans a HF repo for .gguf files, extracts tags, and sums file sizes (handles shards)."""
     try:
         api = HfApi(token=os.environ.get("HF_TOKEN"))
-        info = api.model_info(repo)
+        info = api.model_info(repo, files_metadata=True)
         quants_dict = {}
         
         for f in info.siblings:
@@ -307,7 +307,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         os.makedirs(CACHE_DIR, exist_ok=True)
         try:
             api = HfApi(token=os.environ.get("HF_TOKEN"))
-            info = api.model_info(req.hf_repo)
+            info = api.model_info(req.hf_repo, files_metadata=True)
             model_size = sum(f.size for f in info.siblings if fnmatch.fnmatch(f.rfilename, f"*{req.quant}*") and f.size)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"API Error: {e}")

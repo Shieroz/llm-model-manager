@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Copy the frontend files
 COPY index.html .
-COPY tailwind.config.js .
 COPY input.css .
 
 # Download the Tailwind Standalone CLI, make it executable, and compile the CSS!
