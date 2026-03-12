@@ -20,25 +20,27 @@ class ModelSetup(BaseModel):
     parameters: str 
 
 def write_to_ini(symlink_name: str, params_dict: dict):
-    """Safely writes parameters to INI, handling nested JSON and clearing old keys."""
+    """Safely writes parameters to INI, adding the critical 'model' path."""
     os.makedirs(SERVED_DIR, exist_ok=True)
     config = configparser.ConfigParser()
-    
-    # Preserve case sensitivity for llama.cpp keys (e.g., chat-template-kwargs)
     config.optionxform = str 
     
     if os.path.exists(INI_PATH):
         config.read(INI_PATH)
     
-    section_name = f"{symlink_name}.gguf"
+    # 1. Clean the UI name (no .gguf suffix)
+    section_name = symlink_name 
     
-    # Wipe the existing section if it exists so deleted params are actually removed
     if config.has_section(section_name):
         config.remove_section(section_name)
     config.add_section(section_name)
     
+    # 2. Tell llama-server exactly where the physical file is
+    symlink_path = os.path.join(SERVED_DIR, f"{symlink_name}.gguf")
+    config.set(section_name, "model", symlink_path)
+    
+    # 3. Write the rest of the JSON parameters
     for key, value in params_dict.items():
-        # If the user passed a nested dict/list, strictly format it as a double-quoted JSON string
         if isinstance(value, (dict, list)):
             config.set(section_name, key, json.dumps(value))
         elif isinstance(value, bool):
@@ -106,11 +108,14 @@ async def get_configs():
     
     configs = []
     for section in config.sections():
-        clean_name = section.replace(".gguf", "")
+        params = dict(config.items(section))
+        # Remove the 'model' path from the UI parameter display
+        file_path = params.pop("model", f"{section}.gguf") 
+        
         configs.append({
-            "name": clean_name,
-            "file": section,
-            "params": dict(config.items(section))
+            "name": section,
+            "file": file_path,
+            "params": params
         })
     return configs
 
@@ -172,7 +177,7 @@ async def serve_ui():
                         <button type="submit" id="submitBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">
                             Provision Model
                         </button>
-                        <button type="button" onclick="resetForm()" class="bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition">
+                        <button type="button" id="clearBtn" onclick="resetForm()" class="bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition">
                             Clear
                         </button>
                     </div>
@@ -249,6 +254,8 @@ async def serve_ui():
                 document.getElementById('symlink_name').className = "mt-1 w-full bg-gray-600 border border-gray-500 rounded p-2 text-gray-300 cursor-not-allowed";
                 document.getElementById('submitBtn').textContent = "Update Parameters";
                 document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition";
+                document.getElementById('clearBtn').textContent = "Cancel Edit";
+                document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition";
                 
                 // Intelligently reconstruct the JSON for the textarea
                 let paramsObj = {};
@@ -277,6 +284,8 @@ async def serve_ui():
                 document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition";
                 document.getElementById('parameters').value = '{\\n  "temp": 0.6,\\n  "top_p": 0.95\\n}';
                 document.getElementById('statusMsg').className = "hidden";
+                document.getElementById('clearBtn').textContent = "Clear";
+                document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
             }
 
             async function deleteConfig(name) {
