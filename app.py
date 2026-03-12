@@ -257,6 +257,7 @@ async def serve_ui():
                             <div class="flex flex-wrap mt-2">${paramsHtml}</div>
                         </div>
                         <div class="flex flex-col gap-2 ml-4">
+                            <button onclick="duplicateConfig('${conf.name}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1 px-3 rounded transition">Duplicate</button>
                             <button onclick="editConfig('${conf.name}')" class="bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-3 rounded transition">Edit</button>
                             <button onclick="deleteConfig('${conf.name}')" class="bg-red-600 hover:bg-red-500 text-white text-xs py-1 px-3 rounded transition">Delete</button>
                         </div>
@@ -283,6 +284,32 @@ async def serve_ui():
                 
                 document.getElementById('clearBtn').textContent = "Cancel Edit";
                 document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition";
+                
+                document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
+
+            function duplicateConfig(name) {
+                const conf = currentConfigs.find(c => c.name === name);
+                if(!conf) return;
+                
+                // Reset form first to clear any lingering edit states
+                resetForm();
+                
+                document.getElementById('formTitle').textContent = `Duplicate Config: ${name}`;
+                document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-green-400";
+                
+                // Populate the form with the copied data
+                document.getElementById('hf_repo').value = conf.repo;
+                document.getElementById('quant').value = conf.quant;
+                document.getElementById('symlink_name').value = conf.name + "-COPY";
+                
+                // original_name remains empty because this is a NEW deployment!
+                
+                document.getElementById('submitBtn').textContent = "Provision Duplicate";
+                document.getElementById('submitBtn').className = "flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded transition";
+                
+                document.getElementById('clearBtn').textContent = "Cancel";
                 
                 document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
