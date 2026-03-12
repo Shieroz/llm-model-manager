@@ -13,16 +13,16 @@ app = FastAPI(title="Local LLM Model Manager")
 CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
 INI_PATH = os.path.join(SERVED_DIR, "models.ini")
+STATE_FILE = os.path.join(SERVED_DIR, "state.json")
 
 class ModelSetup(BaseModel):
-    hf_repo: str = ""
-    quant: str = ""
-    symlink_name: str
-    original_name: str = ""       # Tracks the old name during a rename operation
-    parameters: str
+    hf_repo: str             
+    quant: str               
+    symlink_name: str             
+    original_name: str = ""       
+    parameters: str 
 
 def restart_llama_container():
-    """Dynamically restarts the target container using the compose environment variable."""
     container_name = os.environ.get("LLAMA_CONTAINER_NAME", "llama-cpp")
     print(f"Restarting {container_name} to apply changes...")
     try:
@@ -34,38 +34,67 @@ def restart_llama_container():
     except Exception as e:
         print(f"Failed to restart {container_name}: {e}")
 
-def write_to_ini(symlink_name: str, params_dict: dict):
+# --- STATE MANAGEMENT ---
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_state(state):
     os.makedirs(SERVED_DIR, exist_ok=True)
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=2)
+
+def sync_system(state):
+    """Rebuilds all symlinks and the models.ini file from the source of truth (state.json)"""
+    os.makedirs(SERVED_DIR, exist_ok=True)
+    
+    # Safely clear old symlinks
+    for f in glob.glob(os.path.join(SERVED_DIR, "*.gguf")):
+        try: os.unlink(f)
+        except: pass
+        
     config = configparser.ConfigParser()
-    config.optionxform = str 
+    config.optionxform = str
     
-    if os.path.exists(INI_PATH):
-        config.read(INI_PATH)
-    
-    section_name = symlink_name 
-    
-    if config.has_section(section_name):
-        config.remove_section(section_name)
-    config.add_section(section_name)
-    
-    symlink_path = os.path.join(SERVED_DIR, f"{symlink_name}.gguf")
-    config.set(section_name, "model", symlink_path)
-    
-    for key, value in params_dict.items():
-        if isinstance(value, (dict, list)):
-            config.set(section_name, key, json.dumps(value))
-        elif isinstance(value, bool):
-            config.set(section_name, key, str(value).lower())
-        else:
-            config.set(section_name, key, str(value))
+    for name, data in state.items():
+        repo = data["repo"]
+        quant = data["quant"]
+        params = data["params"]
+        
+        search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*{quant}*.gguf"
+        files = sorted(glob.glob(search_pattern, recursive=True))
+        
+        # Skip gracefully if the user manually deleted the cache folder
+        if not files:
+            continue 
             
-    with open(INI_PATH, 'w') as configfile:
-        config.write(configfile)
+        # THE FIX: Automatically append the Quant to the filenames and INI sections
+        symlink_filename = f"{name}-[{quant}].gguf"
+        symlink_path = os.path.join(SERVED_DIR, symlink_filename)
+        os.symlink(files[0], symlink_path)
+        
+        section_name = f"{name}-[{quant}]"
+        config.add_section(section_name)
+        config.set(section_name, "model", symlink_path)
+        
+        for k, v in params.items():
+            if isinstance(v, (dict, list)):
+                config.set(section_name, k, json.dumps(v))
+            elif isinstance(v, bool):
+                config.set(section_name, k, str(v).lower())
+            else:
+                config.set(section_name, k, str(v))
+                
+    with open(INI_PATH, 'w') as f:
+        config.write(f)
 
+# --- CORE LOGIC ---
 def process_model(req: ModelSetup, params_dict: dict):
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    os.makedirs(SERVED_DIR, exist_ok=True)
-
     print(f"Downloading {req.hf_repo} ({req.quant})...")
     snapshot_download(
         repo_id=req.hf_repo,
@@ -73,22 +102,24 @@ def process_model(req: ModelSetup, params_dict: dict):
         cache_dir=CACHE_DIR
     )
 
-    search_pattern = f"{CACHE_DIR}/models--{req.hf_repo.replace('/', '--')}/**/*{req.quant}*.gguf"
-    files = sorted(glob.glob(search_pattern, recursive=True))
+    state = load_state()
     
-    if not files:
-        raise FileNotFoundError("Model downloaded, but GGUF file not found in cache.")
-
-    target_file = files[0]
-    symlink_path = os.path.join(SERVED_DIR, f"{req.symlink_name}.gguf")
-
-    if os.path.exists(symlink_path) or os.path.islink(symlink_path):
-        os.unlink(symlink_path)
-    os.symlink(target_file, symlink_path)
-
-    write_to_ini(req.symlink_name, params_dict)
-    print(f"Successfully provisioned: {req.symlink_name}")
+    # Remove the old entry if this was a rename operation
+    if req.original_name and req.original_name != req.symlink_name:
+        if req.original_name in state:
+            del state[req.original_name]
+            
+    # Save the new configuration
+    state[req.symlink_name] = {
+        "repo": req.hf_repo,
+        "quant": req.quant,
+        "params": params_dict
+    }
+    
+    save_state(state)
+    sync_system(state)
     restart_llama_container()
+    print(f"Successfully provisioned: {req.symlink_name}")
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
@@ -101,81 +132,33 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
         
-    # If repo is provided, it's a new download/provision
-    if req.hf_repo and req.quant:
-        background_tasks.add_task(process_model, req, params_dict)
-        return {"status": "Provisioning in background. Container will restart when finished."}
-    
-    # --- EDIT MODE ---
-    target_name = req.symlink_name
-    old_name = req.original_name
-    
-    # Handle Renaming
-    if old_name and old_name != target_name:
-        old_symlink_path = os.path.join(SERVED_DIR, f"{old_name}.gguf")
-        new_symlink_path = os.path.join(SERVED_DIR, f"{target_name}.gguf")
+    if not req.hf_repo or not req.quant:
+        raise HTTPException(status_code=400, detail="HF Repo and Quantization are required.")
         
-        if not os.path.islink(old_symlink_path):
-            raise HTTPException(status_code=404, detail="Original symlink not found for renaming.")
-            
-        target_file = os.readlink(old_symlink_path)
-        
-        if os.path.exists(new_symlink_path) or os.path.islink(new_symlink_path):
-            os.unlink(new_symlink_path)
-        os.symlink(target_file, new_symlink_path)
-        
-        os.unlink(old_symlink_path)
-        
-        config = configparser.ConfigParser()
-        config.optionxform = str
-        if os.path.exists(INI_PATH):
-            config.read(INI_PATH)
-            if config.has_section(old_name):
-                config.remove_section(old_name)
-                with open(INI_PATH, 'w') as configfile:
-                    config.write(configfile)
-    else:
-        # Standard Edit (No Rename)
-        symlink_path = os.path.join(SERVED_DIR, f"{target_name}.gguf")
-        if not os.path.exists(symlink_path):
-            raise HTTPException(status_code=404, detail="Symlink does not exist.")
-            
-    write_to_ini(target_name, params_dict)
-    restart_llama_container()
-    return {"status": "Config updated and container restarted!"}
+    background_tasks.add_task(process_model, req, params_dict)
+    return {"status": "Provisioning... Container will restart when finished."}
 
 @app.get("/api/configs")
 async def get_configs():
-    config = configparser.ConfigParser()
-    config.optionxform = str
-    if os.path.exists(INI_PATH):
-        config.read(INI_PATH)
-    
+    state = load_state()
     configs = []
-    for section in config.sections():
-        params = dict(config.items(section))
-        file_path = params.pop("model", f"{section}.gguf") 
-        configs.append({"name": section, "file": file_path, "params": params})
+    for name, data in state.items():
+        configs.append({
+            "name": name,
+            "repo": data["repo"],
+            "quant": data["quant"],
+            "params": data["params"]
+        })
     return configs
 
 @app.delete("/api/configs/{symlink_name}")
 async def delete_config(symlink_name: str):
-    file_name = f"{symlink_name}.gguf"
-    symlink_path = os.path.join(SERVED_DIR, file_name)
-    
-    if os.path.exists(symlink_path):
-        os.unlink(symlink_path)
-        
-    config = configparser.ConfigParser()
-    config.optionxform = str
-    if os.path.exists(INI_PATH):
-        config.read(INI_PATH)
-        if config.has_section(symlink_name):
-            config.remove_section(symlink_name)
-            with open(INI_PATH, 'w') as configfile:
-                config.write(configfile)
-                
-    restart_llama_container()
+    state = load_state()
+    if symlink_name in state:
+        del state[symlink_name]
+        save_state(state)
+        sync_system(state)
+        restart_llama_container()
     return {"status": "Config deleted and container restarted!"}
 
 # --- FRONTEND WEB UI ---
@@ -199,12 +182,12 @@ async def serve_ui():
                 <form id="setupForm" class="space-y-4">
                     <input type="hidden" id="original_name" value="">
                     <div>
-                        <label class="block text-sm font-medium text-gray-400">HF Repo <span class="text-xs text-gray-500">(Leave blank to edit existing)</span></label>
-                        <input type="text" id="hf_repo" class="mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                        <label class="block text-sm font-medium text-gray-400">HF Repo *</label>
+                        <input type="text" id="hf_repo" required class="mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500">
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-400">Quantization <span class="text-xs text-gray-500">(Leave blank to edit)</span></label>
-                        <input type="text" id="quant" class="mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                        <label class="block text-sm font-medium text-gray-400">Quantization *</label>
+                        <input type="text" id="quant" required class="mt-1 w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:ring-blue-500">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-400">Symlink Name *</label>
@@ -263,8 +246,11 @@ async def serve_ui():
                         .join('');
                     card.innerHTML = `
                         <div class="flex-1">
-                            <h3 class="text-lg font-bold text-white">${conf.name}</h3>
-                            <p class="text-xs text-gray-500 mb-3 font-mono">${conf.file}</p>
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                                ${conf.name}
+                                <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded border border-blue-700 font-mono tracking-wider">${conf.quant}</span>
+                            </h3>
+                            <p class="text-xs text-gray-500 mb-3 font-mono mt-1">Repo: ${conf.repo}</p>
                             <div class="flex flex-wrap mt-2">${paramsHtml}</div>
                         </div>
                         <div class="flex flex-col gap-2 ml-4">
@@ -282,12 +268,14 @@ async def serve_ui():
                 
                 document.getElementById('formTitle').textContent = `Edit Config: ${name}`;
                 document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-yellow-400";
-                document.getElementById('hf_repo').value = '';
-                document.getElementById('quant').value = '';
-                document.getElementById('symlink_name').value = conf.name;
-                document.getElementById('original_name').value = conf.name; // Track the original name
                 
-                document.getElementById('submitBtn').textContent = "Update Parameters";
+                // Form is now completely repopulated from state memory!
+                document.getElementById('hf_repo').value = conf.repo;
+                document.getElementById('quant').value = conf.quant;
+                document.getElementById('symlink_name').value = conf.name;
+                document.getElementById('original_name').value = conf.name;
+                
+                document.getElementById('submitBtn').textContent = "Update Config";
                 document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition";
                 
                 document.getElementById('clearBtn').textContent = "Cancel Edit";
@@ -311,7 +299,7 @@ async def serve_ui():
                 document.getElementById('formTitle').textContent = "Deploy New Config";
                 document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-blue-400";
                 document.getElementById('setupForm').reset();
-                document.getElementById('original_name').value = ''; // Clear tracker
+                document.getElementById('original_name').value = ''; 
                 
                 document.getElementById('submitBtn').textContent = "Provision Model";
                 document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition";
