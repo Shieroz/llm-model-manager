@@ -4,8 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Config Manager</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>tailwind.config = { darkMode: 'class' }</script>
+    <link href="/static/output.css" rel="stylesheet">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <div class="logo-container">
+        <div class="logo-icon">M</div>
+        <div class="logo-text">LLM Model Manager</div>
+    </div>
     <style>
         /* Custom scrollbar for dark mode */
         .custom-scrollbar::-webkit-scrollbar { width: 8px; }
@@ -13,6 +17,31 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
         .config-card { transition: all 0.2s ease-in-out; }
+        .logo-container {
+            display: flex;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            color: white; /* Choose your text color */
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background-color: #3b82f6; /* Blue circle background - choose your color */
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 20px;
+            font-weight: bold;
+            margin-right: 10px;
+            color: white; /* Icon text color */
+        }
+
+        .logo-text {
+            font-size: 1.25rem; /* ~20px - adjust as needed */
+            font-weight: bold;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 p-8 font-sans">
@@ -131,13 +160,13 @@
                 
                 data.quants.forEach(q => {
                     const opt = document.createElement('option');
-                    opt.value = q;
-                    opt.textContent = q;
+                    opt.value = q.name;
+                    opt.textContent = `${q.name} (${q.size_str})`;
                     quantSelect.appendChild(opt);
                     
                     // Smart Default: Find the "largest" 4-bit quant (e.g., UD-Q4_K_XL, Q4_K_M)
-                    if (q.includes('Q4')) {
-                        if (!bestQ4 || q.length > bestQ4.length || q.includes('XL') || q.includes('L')) {
+                    if (q.name.includes('Q4')) {
+                        if (!bestQ4 || q.name.length > bestQ4.length || q.name.includes('XL') || q.name.includes('L')) {
                             bestQ4 = q;
                         }
                     }

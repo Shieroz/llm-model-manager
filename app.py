@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from huggingface_hub import HfApi
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 import subprocess
 import threading
 import fnmatch
@@ -65,13 +66,35 @@ def sync_system(state):
         
         if not files: continue 
             
-        symlink_filename = f"{name}-{quant}.gguf"
-        symlink_path = os.path.join(SERVED_DIR, symlink_filename)
-        os.symlink(files[0], symlink_path)
-        
         section_name = f"{name}-{quant}"
         config.add_section(section_name)
-        config.set(section_name, "model", symlink_path)
+        
+        # --- SHARD HANDLING ---
+        first_shard = None
+        for f in files:
+            # Check if the file uses the Hugging Face split naming convention
+            match = re.search(r'(-\d{5}-of-\d{5}\.gguf)$', f, re.IGNORECASE)
+            
+            if match:
+                suffix = match.group(1)
+                symlink_filename = f"{name}-{quant}{suffix}"
+                symlink_path = os.path.join(SERVED_DIR, symlink_filename)
+                os.symlink(f, symlink_path)
+                
+                # We must hand exactly the "-00001-of-..." file to llama.cpp
+                if "-00001-of-" in suffix:
+                    first_shard = symlink_path
+            else:
+                # Fallback for standard, non-sharded models (e.g., 0.8B models)
+                symlink_filename = f"{name}-{quant}.gguf"
+                symlink_path = os.path.join(SERVED_DIR, symlink_filename)
+                os.symlink(f, symlink_path)
+                if not first_shard:
+                    first_shard = symlink_path
+                    
+        # Point the config to the first shard; llama.cpp will auto-load the rest
+        config.set(section_name, "model", first_shard or files[0])
+        # ----------------------
         
         for k, v in params.items():
             if isinstance(v, (dict, list)): config.set(section_name, k, json.dumps(v))
@@ -223,10 +246,15 @@ async def lifespan(app: FastAPI):
     broadcast_task.cancel()
 
 app = FastAPI(title="Local LLM Model Manager", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- API ENDPOINTS ---
 @app.get("/")
 async def serve_ui(): return FileResponse("index.html")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("favicon.ico")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -238,18 +266,25 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/quants")
 async def get_quants(repo: str):
-    """Scans a HF repo for .gguf files and extracts their quantization tags."""
+    """Scans a HF repo for .gguf files, extracts tags, and sums file sizes (handles shards)."""
     try:
         api = HfApi(token=os.environ.get("HF_TOKEN"))
         info = api.model_info(repo)
-        quants = set()
+        quants_dict = {}
+        
         for f in info.siblings:
             if not f.rfilename.endswith(".gguf"): continue
             # Extracts standard quant markers (e.g. Q4_K_M, UD-Q4_K_XL, IQ3_XXS)
             match = re.search(r'((?:UD-)?(?:I)?Q\d[A-Z0-9_]*)', f.rfilename, re.IGNORECASE)
             if match:
-                quants.add(match.group(1).upper())
-        return {"quants": sorted(list(quants))}
+                q_name = match.group(1).upper()
+                quants_dict[q_name] = quants_dict.get(q_name, 0) + (f.size or 0)
+                
+        # Format sizes and sort by raw byte size (largest first)
+        quants_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in quants_dict.items()]
+        quants_list.sort(key=lambda x: x["raw"], reverse=True)
+        
+        return {"quants": quants_list}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
