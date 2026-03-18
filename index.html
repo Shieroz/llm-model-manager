@@ -156,24 +156,20 @@
                 }
 
                 quantSelect.innerHTML = '';
-                let bestQ4 = '';
-                
+                // Populate the dropdown (Array is already sorted largest to smallest by Python)
                 data.quants.forEach(q => {
                     const opt = document.createElement('option');
                     opt.value = q.name;
                     opt.textContent = `${q.name} (${q.size_str})`;
                     quantSelect.appendChild(opt);
-                    
-                    // Smart Default: Find the "largest" 4-bit quant (e.g., UD-Q4_K_XL, Q4_K_M)
-                    if (q.name.includes('Q4')) {
-                        if (!bestQ4 || q.name.length > bestQ4.length || q.name.includes('XL') || q.name.includes('L')) {
-                            bestQ4 = q;
-                        }
-                    }
                 });
 
-                // Fallback to the first item if no Q4 exists
-                quantSelect.value = bestQ4 || data.quants[0];
+                // Find the absolute largest Q4 mathematically
+                const largestQ4 = data.quants.find(q => q.name.includes('Q4'));
+
+                // Fallback to the first item (the largest overall) if no Q4 exists
+                quantSelect.value = largestQ4 ? largestQ4.name : data.quants[0].name;
+                
                 quantSelect.disabled = false;
             } catch (e) {
                 quantSelect.innerHTML = '<option value="">Error fetching repo</option>';
@@ -282,6 +278,36 @@
             });
         }
 
+        const paramInput = document.getElementById('parameters');
+
+        // Real-time validation while typing
+        paramInput.addEventListener('input', function() {
+            if (!this.value.trim()) {
+                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-green-500', 'focus:ring-green-500');
+                this.classList.add('border-gray-600', 'focus:ring-blue-500');
+                return;
+            }
+            try {
+                JSON.parse(this.value);
+                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-gray-600', 'focus:ring-blue-500');
+                this.classList.add('border-green-500', 'focus:ring-green-500');
+            } catch (e) {
+                this.classList.remove('border-green-500', 'focus:ring-green-500', 'border-gray-600', 'focus:ring-blue-500');
+                this.classList.add('border-red-500', 'focus:ring-red-500');
+            }
+        });
+
+        // Structural auto-formatting only when clicking away
+        paramInput.addEventListener('blur', function() {
+            if (!this.value.trim()) return;
+            try {
+                const parsed = JSON.parse(this.value);
+                this.value = JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                // Ignore formatting if it's currently invalid
+            }
+        });
+
         async function duplicateConfig(name) {
             const conf = currentConfigs.find(c => c.name === name);
             if(!conf) return;
@@ -335,7 +361,6 @@
             document.getElementById('clearBtn').textContent = "Clear";
             document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
             
-            // FIXED ESCAPING BUG
             document.getElementById('parameters').value = '{\n  "temp": 0.6,\n  "top-p": 0.95\n}';
             document.getElementById('statusMsg').className = "hidden";
         }

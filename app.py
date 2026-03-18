@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 import subprocess
 import threading
-import fnmatch
 import os
 import sys
 import glob
@@ -19,7 +18,17 @@ import re
 import time
 import logging
 
-logger = logging.getLogger("__name__")
+log_level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
+# Safely fallback to INFO if the user types an invalid level in docker-compose
+log_level = getattr(logging, log_level_str, logging.INFO)
+
+logging.basicConfig(
+    level=log_level,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+logger.info(f"Model Manager booted. Log level set to: {log_level_str}")
 
 CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
@@ -37,8 +46,8 @@ class ModelSetup(BaseModel):
 # --- UTILS & STATE MANAGEMENT ---
 def format_bytes(bytes_num):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if bytes_num < 1024.0: return f"{bytes_num:.1f} {unit}"
-        bytes_num /= 1024.0
+        if bytes_num < 1000.0: return f"{bytes_num:.1f} {unit}"
+        bytes_num /= 1000.0
     return f"{bytes_num:.1f} PB"
 
 def load_state():
@@ -53,6 +62,7 @@ def save_state(state):
     with open(STATE_FILE, "w") as f: json.dump(state, f, indent=2)
 
 def sync_system(state):
+    logger.info("Syncing system state and regenerating symlinks...")
     os.makedirs(SERVED_DIR, exist_ok=True)
     for f in glob.glob(os.path.join(SERVED_DIR, "*.gguf")):
         try: os.unlink(f)
@@ -65,6 +75,8 @@ def sync_system(state):
         if data.get("status") != "ready": continue 
             
         repo, quant, params = data["repo"], data["quant"], data["params"]
+        logger.debug(f"Processing config: {name} ({quant}) from {repo}")
+
         search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*.gguf"
         all_files = glob.glob(search_pattern, recursive=True)
         
@@ -75,7 +87,9 @@ def sync_system(state):
                 files.append(f)
                 
         files = sorted(files)
-        if not files: continue 
+        if not files:
+            logger.warning(f"No matching files found for {name} ({quant}). Skipping.")
+            continue
             
         section_name = f"{name}-{quant}"
         config.add_section(section_name)
@@ -91,6 +105,7 @@ def sync_system(state):
                 symlink_filename = f"{name}-{quant}{suffix}"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
                 os.symlink(f, symlink_path)
+                logger.debug(f"Created shard symlink: {symlink_filename}")
                 
                 # We must hand exactly the "-00001-of-..." file to llama.cpp
                 if "-00001-of-" in suffix:
@@ -100,6 +115,7 @@ def sync_system(state):
                 symlink_filename = f"{name}-{quant}.gguf"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
                 os.symlink(f, symlink_path)
+                logger.debug(f"Created standard symlink: {symlink_filename}")
                 if not first_shard:
                     first_shard = symlink_path
                     
@@ -113,12 +129,16 @@ def sync_system(state):
             else: config.set(section_name, k, str(v))
                 
     with open(INI_PATH, 'w') as f: config.write(f)
+    logger.info("models.ini successfully rewritten.")
 
 def restart_llama_container():
     container_name = os.environ.get("LLAMA_CONTAINER_NAME", "llama-cpp")
-    print(f"Restarting {container_name} to apply changes...")
-    try: subprocess.run(["curl", "-s", "--unix-socket", "/var/run/docker.sock", "-X", "POST", f"http://localhost/containers/{container_name}/restart"], check=True)
-    except Exception as e: print(f"Failed to restart {container_name}: {e}")
+    logger.info(f"Issuing restart command to container: {container_name}")
+    try:
+        subprocess.run(["curl", "-s", "--unix-socket", "/var/run/docker.sock", "-X", "POST", f"http://localhost/containers/{container_name}/restart"], check=True)
+        logger.info(f"{container_name} restarted successfully.")
+    except Exception as e:
+        logger.error(f"Failed to restart {container_name}: {e}")
 
 # --- WEBSOCKET MANAGER ---
 class ConnectionManager:
@@ -136,6 +156,7 @@ manager = ConnectionManager()
 
 # --- PTY SUBPROCESS WRAPPER ---
 def process_model(req: ModelSetup, params_dict: dict):
+    logger.info(f"Starting background download for {req.symlink_name}...")
     script_code = f"""
 import os
 os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
@@ -160,6 +181,7 @@ snapshot_download(
     try:
         process = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env)
     except Exception as e:
+        logger.error(f"Subprocess failed to launch for {req.symlink_name}: {e}")
         state = load_state()
         if req.symlink_name in state:
             state[req.symlink_name]["status"] = "error"
@@ -222,17 +244,20 @@ snapshot_download(
 
     state = load_state()
     if process.returncode == 0:
+        logger.info(f"Download completed successfully for {req.symlink_name}.")
         if req.symlink_name in state:
             state[req.symlink_name]["status"] = "ready"
             save_state(state)
         sync_system(state)
         restart_llama_container()
     else:
+        err_text = "".join(error_log[-10:]).replace('\n', ' ')
+        exc_match = re.search(r'([A-Za-z]+Error:.*)', err_text)
+        final_err = exc_match.group(1) if exc_match else err_text
+        logger.error(f"Download failed for {req.symlink_name}. Error: {final_err}")
+        
         if req.symlink_name in state:
             state[req.symlink_name]["status"] = "error"
-            err_text = "".join(error_log[-10:]).replace('\n', ' ')
-            exc_match = re.search(r'([A-Za-z]+Error:.*)', err_text)
-            final_err = exc_match.group(1) if exc_match else err_text
             state[req.symlink_name]["error_msg"] = f"Failed: {final_err}"[:120]
             save_state(state)
 
@@ -240,10 +265,14 @@ snapshot_download(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state = load_state()
+    resumed = 0
     for name, data in state.items():
         if data.get("status") == "downloading":
+            resumed += 1
             req = ModelSetup(hf_repo=data["repo"], quant=data["quant"], symlink_name=name, parameters=json.dumps(data["params"]))
             threading.Thread(target=process_model, args=(req, data["params"]), daemon=True).start()
+
+    if resumed > 0: logger.info(f"Resumed {resumed} interrupted downloads.")
     
     async def broadcast_state():
         while True:
@@ -292,23 +321,28 @@ async def get_quants(repo: str):
                 q_name = match.group(1).upper()
                 q_size = f.size or 0
                 quants_dict[q_name] = quants_dict.get(q_name, 0) + q_size
-                logger.info(f"Identified quant '{q_name}' in file '{f.rfilename}' with size {format_bytes(q_size)}")
+                logger.debug(f"Identified quant '{q_name}' in file '{f.rfilename}' with size {format_bytes(q_size)}")
 
         # Format sizes and sort by raw byte size (largest first)
+        logger.info(f"Found {len(quants_dict)} unique quants in {repo}.")
         quants_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in quants_dict.items()]
         quants_list.sort(key=lambda x: x["raw"], reverse=True)
         
         return {"quants": quants_list}
     except Exception as e:
+        logger.error(f"Failed to fetch quants for {repo}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
+    logger.info(f"Received setup request for {req.symlink_name} ({req.quant})")
     req.symlink_name = req.symlink_name.replace("/", "-")
     if req.original_name: req.original_name = req.original_name.replace("/", "-")
 
     try: params_dict = json.loads(req.parameters) if req.parameters.strip() else {}
-    except Exception as e: raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+    except Exception as e:
+        logger.error(f"JSON Parsing failed during setup: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
         
     state = load_state()
     if req.original_name and req.original_name != req.symlink_name and req.original_name in state:
@@ -318,6 +352,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
 
     warning_msg = ""
     if needs_download:
+        logger.info(f"Model not found in cache. Initiating pre-flight storage check...")
         os.makedirs(CACHE_DIR, exist_ok=True)
         try:
             api = HfApi(token=os.environ.get("HF_TOKEN"))
@@ -329,11 +364,14 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
                     if match and match.group(1).upper() == req.quant.upper():
                         model_size += f.size
         except Exception as e:
+            logger.error(f"Pre-flight API check failed: {e}")
             raise HTTPException(status_code=400, detail=f"API Error: {e}")
 
         total, used, free = shutil.disk_usage(CACHE_DIR)
+        logger.debug(f"Storage Status: {format_bytes(free)} free, {format_bytes(model_size)} required.")
         
         if model_size > free:
+            logger.error("Insufficient storage space. Aborting setup.")
             raise HTTPException(status_code=400, detail=f"Insufficient Storage. Model requires {format_bytes(model_size)}, but only {format_bytes(free)} is available.")
             
         if (used + model_size) / total > 0.8:
@@ -349,12 +387,14 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_model, req, params_dict)
         return {"status": f"Provisioning started.{warning_msg}"}
     else:
+        logger.info(f"Model {req.symlink_name} already downloaded. Updating config directly.")
         sync_system(state)
         restart_llama_container()
         return {"status": "Config updated and container restarted!"}
 
 @app.delete("/api/configs/{symlink_name}")
 async def delete_config(symlink_name: str):
+    logger.info(f"Deleting config for {symlink_name}...")
     state = load_state()
     if symlink_name in state:
         del state[symlink_name]

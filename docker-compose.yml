@@ -9,11 +9,17 @@ services:
     environment:
       - LLAMA_CONTAINER_NAME=llama-cpp
       - HF_TOKEN=${HF_TOKEN}
+      # - LOG_LEVEL=DEBUG # Uncomment for verbose logging
     ports:
       - "8000:8000"
     volumes:
       - ${MODELS}:/models
       - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   llama-cpp:
     image: ghcr.io/ggml-org/llama.cpp:full-cuda
