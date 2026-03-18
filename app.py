@@ -25,6 +25,7 @@ CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
 INI_PATH = os.path.join(SERVED_DIR, "models.ini")
 STATE_FILE = os.path.join(SERVED_DIR, "state.json")
+QUANT_REGEX = r'[-._]((?:UD-)?[A-Za-z]*Q[0-9][A-Za-z0-9_]*|BF16|F16|F32|MXFP4_MOE)(?:-\d{5}-of-\d{5})?\.gguf$'
 
 class ModelSetup(BaseModel):
     hf_repo: str             
@@ -64,9 +65,16 @@ def sync_system(state):
         if data.get("status") != "ready": continue 
             
         repo, quant, params = data["repo"], data["quant"], data["params"]
-        search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*{quant}*.gguf"
-        files = sorted(glob.glob(search_pattern, recursive=True))
+        search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*.gguf"
+        all_files = glob.glob(search_pattern, recursive=True)
         
+        files = []
+        for f in all_files:
+            match = re.search(QUANT_REGEX, f, re.IGNORECASE)
+            if match and match.group(1).upper() == quant.upper():
+                files.append(f)
+                
+        files = sorted(files)
         if not files: continue 
             
         section_name = f"{name}-{quant}"
@@ -135,7 +143,7 @@ from huggingface_hub import snapshot_download
 
 snapshot_download(
     repo_id='''{req.hf_repo}''',
-    allow_patterns='''*{req.quant}*''',
+    allow_patterns=['''*{req.quant}.gguf''', '''*{req.quant}-*-of-*.gguf'''],
     cache_dir='''{CACHE_DIR}'''
 )
 """
@@ -279,8 +287,7 @@ async def get_quants(repo: str):
         
         for f in info.siblings:
             if not f.rfilename.endswith(".gguf"): continue
-            # Extracts standard quant markers (e.g. Q4_K_M, UD-Q4_K_XL, IQ3_XXS)
-            match = re.search(r'((?:UD-)?(?:I)?Q\d[A-Z0-9_]*)', f.rfilename, re.IGNORECASE)
+            match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
             if match:
                 q_name = match.group(1).upper()
                 q_size = f.size or 0
@@ -315,7 +322,12 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         try:
             api = HfApi(token=os.environ.get("HF_TOKEN"))
             info = api.model_info(req.hf_repo, files_metadata=True)
-            model_size = sum(f.size for f in info.siblings if fnmatch.fnmatch(f.rfilename, f"*{req.quant}*") and f.size)
+            model_size = 0
+            for f in info.siblings:
+                if f.size and f.rfilename.endswith(".gguf"):
+                    match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
+                    if match and match.group(1).upper() == req.quant.upper():
+                        model_size += f.size
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"API Error: {e}")
 
