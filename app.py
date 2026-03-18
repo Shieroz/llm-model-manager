@@ -17,6 +17,9 @@ import asyncio
 import pty
 import re
 import time
+import logging
+
+logger = logging.getLogger("__name__")
 
 CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
@@ -269,7 +272,9 @@ async def get_quants(repo: str):
     """Scans a HF repo for .gguf files, extracts tags, and sums file sizes (handles shards)."""
     try:
         api = HfApi(token=os.environ.get("HF_TOKEN"))
+        logger.info(f"Scanning repo '{repo}' for quant files...")
         info = api.model_info(repo, files_metadata=True)
+        logger.info(f"Found {len(info.siblings)} files in the repo. Processing...")
         quants_dict = {}
         
         for f in info.siblings:
@@ -278,8 +283,10 @@ async def get_quants(repo: str):
             match = re.search(r'((?:UD-)?(?:I)?Q\d[A-Z0-9_]*)', f.rfilename, re.IGNORECASE)
             if match:
                 q_name = match.group(1).upper()
-                quants_dict[q_name] = quants_dict.get(q_name, 0) + (f.size or 0)
-                
+                q_size = f.size or 0
+                quants_dict[q_name] = quants_dict.get(q_name, 0) + q_size
+                logger.info(f"Identified quant '{q_name}' in file '{f.rfilename}' with size {format_bytes(q_size)}")
+
         # Format sizes and sort by raw byte size (largest first)
         quants_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in quants_dict.items()]
         quants_list.sort(key=lambda x: x["raw"], reverse=True)
