@@ -37,11 +37,12 @@ STATE_FILE = os.path.join(SERVED_DIR, "state.json")
 QUANT_REGEX = r'[-._]((?:UD-)?[A-Za-z]*Q[0-9][A-Za-z0-9_]*|BF16|F16|F32|MXFP4_MOE)(?:-\d{5}-of-\d{5})?\.gguf$'
 
 class ModelSetup(BaseModel):
-    hf_repo: str             
-    quant: str               
-    symlink_name: str             
-    original_name: str = ""       
-    parameters: str 
+    hf_repo: str
+    quant: str
+    mmproj: str = ""
+    symlink_name: str
+    original_name: str = ""
+    parameters: str
 
 # --- UTILS & STATE MANAGEMENT ---
 def format_bytes(bytes_num):
@@ -68,13 +69,14 @@ def sync_system(state):
         try: os.unlink(f)
         except: pass
         
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(allow_no_value=True)
     config.optionxform = str
     
     for name, data in state.items():
         if data.get("status") != "ready": continue 
             
         repo, quant, params = data["repo"], data["quant"], data["params"]
+        mmproj = data.get("mmproj", "")
         logger.debug(f"Processing config: {name} ({quant}) from {repo}")
 
         search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*.gguf"
@@ -82,6 +84,7 @@ def sync_system(state):
         
         files = []
         for f in all_files:
+            if "mmproj" in f.lower(): continue
             match = re.search(QUANT_REGEX, f, re.IGNORECASE)
             if match and match.group(1).upper() == quant.upper():
                 files.append(f)
@@ -122,11 +125,26 @@ def sync_system(state):
         # Point the config to the first shard; llama.cpp will auto-load the rest
         config.set(section_name, "model", first_shard or files[0])
         # ----------------------
+
+        if mmproj:
+            for f in all_files:
+                if "mmproj" in f.lower():
+                    match = re.search(QUANT_REGEX, f, re.IGNORECASE)
+                    if match and match.group(1).upper() == mmproj.upper():
+                        mmproj_path = os.path.join(SERVED_DIR, f"{name}-mmproj.gguf")
+                        os.symlink(f, mmproj_path)
+                        logger.debug(f"Created mmproj symlink: {mmproj_path}")
+                        break
         
         for k, v in params.items():
-            if isinstance(v, (dict, list)): config.set(section_name, k, json.dumps(v))
-            elif isinstance(v, bool): config.set(section_name, k, str(v).lower())
-            else: config.set(section_name, k, str(v))
+            if v is None:
+                config.set(section_name, k, "true")
+            elif isinstance(v, (dict, list)):
+                config.set(section_name, k, json.dumps(v))
+            elif isinstance(v, bool):
+                config.set(section_name, k, str(v).lower())
+            else:
+                config.set(section_name, k, str(v))
                 
     with open(INI_PATH, 'w') as f: config.write(f)
     logger.info("models.ini successfully rewritten.")
@@ -157,6 +175,10 @@ manager = ConnectionManager()
 # --- PTY SUBPROCESS WRAPPER ---
 def process_model(req: ModelSetup, params_dict: dict):
     logger.info(f"Starting background download for {req.symlink_name}...")
+    patterns = f"['*{req.quant}.gguf', '*{req.quant}-*-of-*.gguf']"
+    if req.mmproj:
+        patterns = f"['*{req.quant}.gguf', '*{req.quant}-*-of-*.gguf', '*mmproj*{req.mmproj}*.gguf']"
+        
     script_code = f"""
 import os
 os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
@@ -164,7 +186,7 @@ from huggingface_hub import snapshot_download
 
 snapshot_download(
     repo_id='''{req.hf_repo}''',
-    allow_patterns=['''*{req.quant}.gguf''', '''*{req.quant}-*-of-*.gguf'''],
+    allow_patterns={patterns},
     cache_dir='''{CACHE_DIR}'''
 )
 """
@@ -313,20 +335,30 @@ async def get_quants(repo: str):
         info = api.model_info(repo, files_metadata=True)
         logger.info(f"Found {len(info.siblings)} files in the repo. Processing...")
         quants_dict = {}
+        mmproj_dict = {}
         
         for f in info.siblings:
             if not f.rfilename.endswith(".gguf"): continue
             match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
-            if match:
-                q_name = match.group(1).upper()
-                q_size = f.size or 0
+            if not match: continue
+            
+            q_name = match.group(1).upper()
+            q_size = f.size or 0
+            
+            # Separate vision projectors from standard text models
+            if "mmproj" in f.rfilename.lower():
+                mmproj_dict[q_name] = mmproj_dict.get(q_name, 0) + q_size
+            else:
                 quants_dict[q_name] = quants_dict.get(q_name, 0) + q_size
-                logger.debug(f"Identified quant '{q_name}' in file '{f.rfilename}' with size {format_bytes(q_size)}")
 
         # Format sizes and sort by raw byte size (largest first)
         logger.info(f"Found {len(quants_dict)} unique quants in {repo}.")
+
         quants_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in quants_dict.items()]
         quants_list.sort(key=lambda x: x["raw"], reverse=True)
+
+        mmproj_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in mmproj_dict.items()]
+        mmproj_list.sort(key=lambda x: x["raw"], reverse=True)
         
         return {"quants": quants_list}
     except Exception as e:
@@ -348,7 +380,12 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     if req.original_name and req.original_name != req.symlink_name and req.original_name in state:
         del state[req.original_name]
         
-    needs_download = req.symlink_name not in state or state[req.symlink_name]["repo"] != req.hf_repo or state[req.symlink_name]["quant"] != req.quant
+    needs_download = (
+        req.symlink_name not in state or
+        state[req.symlink_name]["repo"] != req.hf_repo or
+        state[req.symlink_name]["quant"] != req.quant or
+        state[req.symlink_name].get("mmproj") != req.mmproj
+    )
 
     warning_msg = ""
     if needs_download:
@@ -360,8 +397,11 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
             model_size = 0
             for f in info.siblings:
                 if f.size and f.rfilename.endswith(".gguf"):
+                    is_mmproj = "mmproj" in f.rfilename.lower()
                     match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
-                    if match and match.group(1).upper() == req.quant.upper():
+                    if is_mmproj and req.mmproj and match.group(1).upper() == req.mmproj.upper():
+                        model_size += f.size
+                    elif not is_mmproj and match.group(1).upper() == req.quant.upper():
                         model_size += f.size
         except Exception as e:
             logger.error(f"Pre-flight API check failed: {e}")
@@ -378,7 +418,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
             warning_msg = f" (Warning: This will push disk usage above 80%)"
 
     state[req.symlink_name] = {
-        "repo": req.hf_repo, "quant": req.quant, "params": params_dict,
+        "repo": req.hf_repo, "quant": req.quant, "mmproj": req.mmproj, "params": params_dict,
         "status": "downloading" if needs_download else "ready",
     }
     save_state(state)

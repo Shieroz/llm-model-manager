@@ -63,6 +63,14 @@
                         <option value="">Paste repo above to load quants...</option>
                     </select>
                 </div>
+
+                <div id="mmproj_container" class="hidden">
+                    <label class="block text-sm text-gray-400">Vision Projector (mmproj)</label>
+                    <select id="mmproj" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                        <option value="">None</option>
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">Optional. Adds multimodal vision capabilities.</p>
+                </div>
                 
                 <div>
                     <label class="block text-sm text-gray-400">Symlink Name *</label>
@@ -71,7 +79,7 @@
                 
                 <div>
                     <label class="block text-sm text-gray-400">Parameters (JSON) *</label>
-                    <textarea id="parameters" required rows="8" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm">{"temp": 0.6}</textarea>
+                    <textarea id="parameters" required rows="8" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm"></textarea>
                 </div>
                 
                 <div class="flex gap-2">
@@ -102,6 +110,42 @@
         let currentConfigs = [];
         let expandedConfigs = new Set();
         let repoDebounceTimer;
+
+        const defaultParams = {
+            "no-mmap": true,
+            "fit": "on",
+            "fitc": 16384,
+            "fa": "on",
+            "cache-type-k": "q8_0",
+            "cache-type-v": "q8_0",
+            "t": 8,
+            "n": -1,
+            "temp": 0.6,
+            "top-p": 0.95,
+            "top-k": 40,
+            "min-p": 0,
+        };
+
+        const mmprojSelect = document.getElementById('mmproj');
+        const symlinkInput = document.getElementById('symlink_name');
+        
+        function updateMmprojJSON() {
+            const val = mmprojSelect.value;
+            const sym = symlinkInput.value || "model";
+            try {
+                const parsed = JSON.parse(paramInput.value);
+                if (val) {
+                    parsed["mmproj"] = `/models/served/${sym}-mmproj.gguf`;
+                } else {
+                    delete parsed["mmproj"];
+                }
+                paramInput.value = JSON.stringify(parsed, null, 2);
+                paramInput.dispatchEvent(new Event('input')); // Trigger validation glow
+            } catch(e) {}
+        }
+
+        mmprojSelect.addEventListener('change', updateMmprojJSON);
+        symlinkInput.addEventListener('input', updateMmprojJSON);
 
         // --- WEBSOCKET CONNECTION ---
         function connectWS() {
@@ -166,11 +210,26 @@
 
                 // Find the absolute largest Q4 mathematically
                 const largestQ4 = data.quants.find(q => q.name.includes('Q4'));
-
                 // Fallback to the first item (the largest overall) if no Q4 exists
                 quantSelect.value = largestQ4 ? largestQ4.name : data.quants[0].name;
-                
                 quantSelect.disabled = false;
+
+                // Populate the Vision Projector Dropdown
+                const mmprojContainer = document.getElementById('mmproj_container');
+                const mmprojSelect = document.getElementById('mmproj');
+                mmprojSelect.innerHTML = '<option value="">None</option>';
+                
+                if (data.mmprojs && data.mmprojs.length > 0) {
+                    mmprojContainer.classList.remove('hidden');
+                    data.mmprojs.forEach(q => {
+                        const opt = document.createElement('option');
+                        opt.value = q.name;
+                        opt.textContent = `${q.name} (${q.size_str})`;
+                        mmprojSelect.appendChild(opt);
+                    });
+                } else {
+                    mmprojContainer.classList.add('hidden');
+                }
             } catch (e) {
                 quantSelect.innerHTML = '<option value="">Error fetching repo</option>';
             }
@@ -279,6 +338,7 @@
         }
 
         const paramInput = document.getElementById('parameters');
+        paramInput.value = JSON.stringify(defaultParams, null, 2);
 
         // Real-time validation while typing
         paramInput.addEventListener('input', function() {
@@ -361,7 +421,7 @@
             document.getElementById('clearBtn').textContent = "Clear";
             document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
             
-            document.getElementById('parameters').value = '{\n  "temp": 0.6,\n  "top-p": 0.95\n}';
+            document.getElementById('parameters').value = JSON.stringify(defaultParams, null, 2);;
             document.getElementById('statusMsg').className = "hidden";
         }
 
@@ -383,6 +443,7 @@
             const payload = {
                 hf_repo: document.getElementById('hf_repo').value,
                 quant: document.getElementById('quant').value,
+                mmproj: document.getElementById('mmproj').value,
                 symlink_name: document.getElementById('symlink_name').value,
                 original_name: document.getElementById('original_name').value,
                 parameters: document.getElementById('parameters').value

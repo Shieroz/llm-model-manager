@@ -39,13 +39,6 @@ services:
       --models-max 4
       --host 0.0.0.0
       --port 8081
-      -fit on
-      -fitc 16384
-      -fa on
-      --cache-type-k q8_0
-      --cache-type-v q8_0
-      -t 8
-      -n -1
     deploy:
       resources:
         reservations:
