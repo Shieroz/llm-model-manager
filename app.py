@@ -19,7 +19,6 @@ import time
 import logging
 
 log_level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
-# Safely fallback to INFO if the user types an invalid level in docker-compose
 log_level = getattr(logging, log_level_str, logging.INFO)
 
 logging.basicConfig(
@@ -43,6 +42,14 @@ class ModelSetup(BaseModel):
     symlink_name: str
     original_name: str = ""
     parameters: str
+
+class DeleteModelReq(BaseModel):
+    repo: str
+    quant: str
+    is_mmproj: bool
+
+class RpcModeReq(BaseModel):
+    enabled: bool
 
 # --- UTILS & STATE MANAGEMENT ---
 def format_bytes(bytes_num):
@@ -71,9 +78,16 @@ def sync_system(state):
         
     config = configparser.ConfigParser(allow_no_value=True)
     config.optionxform = str
+    state_changed = False
+
+    rpc_mode = state.get("_meta", {}).get("rpc_mode", False)
     
     for name, data in state.items():
-        if data.get("status") != "ready": continue 
+        if name == "_meta" or data.get("status") in ["downloading", "error"]: continue
+
+        has_rpc = bool(data.get("params", {}).get("rpc"))
+        if rpc_mode and not has_rpc: continue
+        if not rpc_mode and has_rpc: continue
             
         repo, quant, params = data["repo"], data["quant"], data["params"]
         mmproj = data.get("mmproj", "")
@@ -90,41 +104,49 @@ def sync_system(state):
                 files.append(f)
                 
         files = sorted(files)
-        if not files:
-            logger.warning(f"No matching files found for {name} ({quant}). Skipping.")
+        
+        mmproj_missing = False
+        if mmproj:
+            found_mmproj = False
+            for f in all_files:
+                if "mmproj" in f.lower():
+                    match = re.search(QUANT_REGEX, f, re.IGNORECASE)
+                    if match and match.group(1).upper() == mmproj.upper():
+                        found_mmproj = True
+                        break
+            if not found_mmproj:
+                mmproj_missing = True
+
+        if not files or mmproj_missing:
+            logger.warning(f"Files missing for {name}. Tagging as missing.")
+            if data.get("status") != "missing":
+                data["status"] = "missing"
+                state_changed = True
             continue
-            
+        else:
+            if data.get("status") == "missing":
+                data["status"] = "ready"
+                state_changed = True
+
         section_name = f"{name}-{quant}"
         config.add_section(section_name)
         
-        # --- SHARD HANDLING ---
         first_shard = None
         for f in files:
-            # Check if the file uses the Hugging Face split naming convention
             match = re.search(r'(-\d{5}-of-\d{5}\.gguf)$', f, re.IGNORECASE)
-            
             if match:
                 suffix = match.group(1)
                 symlink_filename = f"{name}-{quant}{suffix}"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
                 os.symlink(f, symlink_path)
-                logger.debug(f"Created shard symlink: {symlink_filename}")
-                
-                # We must hand exactly the "-00001-of-..." file to llama.cpp
-                if "-00001-of-" in suffix:
-                    first_shard = symlink_path
+                if "-00001-of-" in suffix: first_shard = symlink_path
             else:
-                # Fallback for standard, non-sharded models (e.g., 0.8B models)
                 symlink_filename = f"{name}-{quant}.gguf"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
                 os.symlink(f, symlink_path)
-                logger.debug(f"Created standard symlink: {symlink_filename}")
-                if not first_shard:
-                    first_shard = symlink_path
+                if not first_shard: first_shard = symlink_path
                     
-        # Point the config to the first shard; llama.cpp will auto-load the rest
         config.set(section_name, "model", first_shard or files[0])
-        # ----------------------
 
         if mmproj:
             for f in all_files:
@@ -137,15 +159,12 @@ def sync_system(state):
                         break
         
         for k, v in params.items():
-            if v is None:
-                config.set(section_name, k, "true")
-            elif isinstance(v, (dict, list)):
-                config.set(section_name, k, json.dumps(v))
-            elif isinstance(v, bool):
-                config.set(section_name, k, str(v).lower())
-            else:
-                config.set(section_name, k, str(v))
+            if v is None: config.set(section_name, k, "true")
+            elif isinstance(v, (dict, list)): config.set(section_name, k, json.dumps(v))
+            elif isinstance(v, bool): config.set(section_name, k, str(v).lower())
+            else: config.set(section_name, k, str(v))
                 
+    if state_changed: save_state(state)
     with open(INI_PATH, 'w') as f: config.write(f)
     logger.info("models.ini successfully rewritten.")
 
@@ -209,11 +228,11 @@ snapshot_download(
             state[req.symlink_name]["status"] = "error"
             state[req.symlink_name]["error_msg"] = f"Subprocess failed: {e}"[:120]
             save_state(state)
-        os.close(slave); os.close(master)
+        os.close(slave)
+        os.close(master)
         return
 
     os.close(slave)
-
     buffer = ""
     error_log = []
     last_ui_update = 0
@@ -300,8 +319,10 @@ async def lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(1)
             if manager.active_connections:
-                configs = [{"name": k, **v} for k, v in load_state().items()]
-                await manager.broadcast(json.dumps({"type": "update", "data": configs}))
+                state_data = load_state()
+                configs = [{"name": k, **v} for k, v in state_data.items() if k != "_meta"]
+                rpc_mode = state_data.get("_meta", {}).get("rpc_mode", False)
+                await manager.broadcast(json.dumps({"type": "update", "data": configs, "rpc_mode": rpc_mode}))
                 
     broadcast_task = asyncio.create_task(broadcast_state())
     yield
@@ -315,8 +336,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def serve_ui(): return FileResponse("index.html")
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse("favicon.ico")
+async def favicon(): return FileResponse("favicon.ico")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -328,7 +348,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/quants")
 async def get_quants(repo: str):
-    """Scans a HF repo for .gguf files, extracts tags, and sums file sizes (handles shards)."""
     try:
         api = HfApi(token=os.environ.get("HF_TOKEN"))
         logger.info(f"Scanning repo '{repo}' for quant files...")
@@ -345,13 +364,11 @@ async def get_quants(repo: str):
             q_name = match.group(1).upper()
             q_size = f.size or 0
             
-            # Separate vision projectors from standard text models
             if "mmproj" in f.rfilename.lower():
                 mmproj_dict[q_name] = mmproj_dict.get(q_name, 0) + q_size
             else:
                 quants_dict[q_name] = quants_dict.get(q_name, 0) + q_size
 
-        # Format sizes and sort by raw byte size (largest first)
         logger.info(f"Found {len(quants_dict)} unique quants in {repo}.")
 
         quants_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in quants_dict.items()]
@@ -360,10 +377,81 @@ async def get_quants(repo: str):
         mmproj_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in mmproj_dict.items()]
         mmproj_list.sort(key=lambda x: x["raw"], reverse=True)
         
-        return {"quants": quants_list}
+        return {"quants": quants_list, "mmprojs": mmproj_list}
     except Exception as e:
         logger.error(f"Failed to fetch quants for {repo}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/models")
+async def get_local_models():
+    models_data = []
+    if not os.path.exists(CACHE_DIR): return {"models": []}
+    
+    for repo_dir in glob.glob(os.path.join(CACHE_DIR, "models--*")):
+        repo_name = os.path.basename(repo_dir).replace("models--", "").replace("--", "/")
+        quants_map = {}
+        mmprojs_map = {}
+        
+        for f in glob.glob(os.path.join(repo_dir, "**/*.gguf"), recursive=True):
+            filename = os.path.basename(f)
+            size = os.path.getsize(f)
+            
+            match = re.search(QUANT_REGEX, filename, re.IGNORECASE)
+            if not match: continue
+            quant = match.group(1).upper()
+            
+            if "mmproj" in filename.lower():
+                if quant not in mmprojs_map: mmprojs_map[quant] = {"total_size": 0, "files": []}
+                mmprojs_map[quant]["total_size"] += size
+                mmprojs_map[quant]["files"].append({"name": filename, "size_str": format_bytes(size)})
+            else:
+                if quant not in quants_map: quants_map[quant] = {"total_size": 0, "files": []}
+                quants_map[quant]["total_size"] += size
+                quants_map[quant]["files"].append({"name": filename, "size_str": format_bytes(size)})
+        
+        if quants_map or mmprojs_map:
+            models_data.append({
+                "repo": repo_name,
+                "quants": [{"quant": k, "size_str": format_bytes(v["total_size"]), "files": sorted(v["files"], key=lambda x: x["name"])} for k, v in quants_map.items()],
+                "mmprojs": [{"quant": k, "size_str": format_bytes(v["total_size"]), "files": sorted(v["files"], key=lambda x: x["name"])} for k, v in mmprojs_map.items()]
+            })
+            
+    return {"models": models_data}
+
+@app.post("/api/rpc_mode")
+async def toggle_rpc(req: RpcModeReq):
+    state = load_state()
+    if "_meta" not in state:
+        state["_meta"] = {}
+    state["_meta"]["rpc_mode"] = req.enabled
+    save_state(state)
+    sync_system(state)
+    restart_llama_container()
+    return {"status": f"RPC mode enabled: {req.enabled}"}
+
+@app.post("/api/models/delete")
+async def delete_local_model(req: DeleteModelReq):
+    search_pattern = f"{CACHE_DIR}/models--{req.repo.replace('/', '--')}/**/*.gguf"
+    deleted = False
+    for f in glob.glob(search_pattern, recursive=True):
+        filename = os.path.basename(f)
+        match = re.search(QUANT_REGEX, filename, re.IGNORECASE)
+        if not match: continue
+        if match.group(1).upper() != req.quant.upper(): continue
+        
+        is_mmproj_file = "mmproj" in filename.lower()
+        if is_mmproj_file == req.is_mmproj:
+            try:
+                os.remove(f)
+                deleted = True
+            except: pass
+            
+    if deleted:
+        state = load_state()
+        sync_system(state)
+        restart_llama_container()
+        return {"status": "Deleted successfully"}
+    raise HTTPException(status_code=404, detail="Files not found on disk")
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
@@ -382,9 +470,10 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         
     needs_download = (
         req.symlink_name not in state or
-        state[req.symlink_name]["repo"] != req.hf_repo or
-        state[req.symlink_name]["quant"] != req.quant or
-        state[req.symlink_name].get("mmproj") != req.mmproj
+        state[req.symlink_name].get("repo") != req.hf_repo or
+        state[req.symlink_name].get("quant") != req.quant or
+        state[req.symlink_name].get("mmproj", "") != req.mmproj or
+        state[req.symlink_name].get("status") == "missing"
     )
 
     warning_msg = ""
@@ -399,6 +488,8 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
                 if f.size and f.rfilename.endswith(".gguf"):
                     is_mmproj = "mmproj" in f.rfilename.lower()
                     match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
+                    if not match: continue
+
                     if is_mmproj and req.mmproj and match.group(1).upper() == req.mmproj.upper():
                         model_size += f.size
                     elif not is_mmproj and match.group(1).upper() == req.quant.upper():

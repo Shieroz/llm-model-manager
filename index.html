@@ -16,100 +16,137 @@
         .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        
+        .logo-container { display: flex; align-items: center; font-family: Arial, sans-serif; color: white; margin-bottom: 1rem; }
+        .logo-icon { width: 40px; height: 40px; background-color: #3b82f6; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 20px; font-weight: bold; margin-right: 10px; color: white; }
+        .logo-text { font-size: 1.25rem; font-weight: bold; }
+
+        /* Hardcoded Hover Effects */
         .config-card { transition: all 0.2s ease-in-out; }
-        .logo-container {
-            display: flex;
-            align-items: center;
-            font-family: Arial, sans-serif;
-            color: white; /* Choose your text color */
+        .storage-repo-card { transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+        .storage-repo-card:hover { border-color: #a855f7; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.5); }
+        .storage-file-row { transition: background-color 0.2s ease, border-color 0.2s ease; }
+        .storage-file-row:hover { background-color: #374151; border-color: #9ca3af; }
+        .storage-file-row:hover .file-expand-icon { color: #ffffff; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #a855f7; }
+        .toggle-checkbox:checked + .toggle-label::after { transform: translateX(100%); }
+        .toggle-label {
+            width: 2rem; height: 1rem; background-color: #4b5563; border-radius: 9999px;
+            position: relative; cursor: pointer; transition: background-color 0.2s; display: inline-block;
         }
-
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background-color: #3b82f6; /* Blue circle background - choose your color */
-            border-radius: 50%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 20px;
-            font-weight: bold;
-            margin-right: 10px;
-            color: white; /* Icon text color */
-        }
-
-        .logo-text {
-            font-size: 1.25rem; /* ~20px - adjust as needed */
-            font-weight: bold;
+        .toggle-label::after {
+            content: ''; position: absolute; top: 2px; left: 2px;
+            width: 0.75rem; height: 0.75rem; background-color: white; border-radius: 50%;
+            transition: transform 0.2s;
         }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 p-8 font-sans">
-    <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8">
+    <div class="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 h-[calc(100vh-4rem)]">
         
-        <div class="md:col-span-5 bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 h-fit sticky top-8">
-            <h2 id="formTitle" class="text-2xl font-bold mb-4 text-blue-400">Deploy New Config</h2>
-            <form id="setupForm" class="space-y-4">
-                <input type="hidden" id="original_name" value="">
-                
-                <div>
-                    <label class="block text-sm text-gray-400">HF Repo *</label>
-                    <input type="text" id="hf_repo" placeholder="unsloth/Qwen3.5-0.8B-GGUF" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
-                </div>
-                
-                <div>
-                    <label class="block text-sm text-gray-400">Quantization *</label>
-                    <select id="quant" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500 disabled:opacity-50">
-                        <option value="">Paste repo above to load quants...</option>
-                    </select>
-                </div>
+        <div class="md:col-span-5 flex flex-col gap-6 h-full">
+            
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 shrink-0">
+                <h2 id="formTitle" class="text-2xl font-bold mb-4 text-blue-400">Deploy New Config</h2>
+                <form id="setupForm" class="space-y-4">
+                    <input type="hidden" id="original_name" value="">
+                    <div>
+                        <label class="block text-sm text-gray-400">HF Repo *</label>
+                        <input type="text" id="hf_repo" placeholder="unsloth/Qwen3.5-0.8B-GGUF" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Quantization *</label>
+                        <select id="quant" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500 disabled:opacity-50">
+                            <option value="">Paste repo above to load quants...</option>
+                        </select>
+                    </div>
+                    <div id="mmproj_container" class="hidden">
+                        <label class="block text-sm text-gray-400">Vision Projector (mmproj)</label>
+                        <select id="mmproj" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Symlink Name *</label>
+                        <input type="text" id="symlink_name" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Parameters (JSON) *</label>
+                        <textarea id="parameters" required rows="7" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm"></textarea>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" id="submitBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition shadow">Provision Model</button>
+                        <button type="button" id="clearBtn" onclick="resetForm()" class="bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition shadow">Clear</button>
+                    </div>
+                    <p id="statusMsg" class="text-sm mt-2 hidden"></p>
+                </form>
+            </div>
 
-                <div id="mmproj_container" class="hidden">
-                    <label class="block text-sm text-gray-400">Vision Projector (mmproj)</label>
-                    <select id="mmproj" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
-                        <option value="">None</option>
-                    </select>
-                    <p class="text-xs text-gray-500 mt-1">Optional. Adds multimodal vision capabilities.</p>
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 flex-1 flex flex-col min-h-0">
+                <div class="flex flex-col xl:flex-row xl:justify-between xl:items-end mb-4 gap-4 border-b border-gray-700 pb-4 shrink-0">
+                    <h2 class="text-xl font-bold text-purple-400">Disk Storage</h2>
+                    <div class="flex items-center gap-2 w-full xl:w-auto">
+                        <input type="text" id="storageSearch" oninput="filterStorage()" placeholder="Search files..." class="w-full bg-gray-900 border border-gray-600 rounded p-1.5 text-sm text-white focus:ring-purple-500 placeholder-gray-500">
+                    </div>
                 </div>
-                
-                <div>
-                    <label class="block text-sm text-gray-400">Symlink Name *</label>
-                    <input type="text" id="symlink_name" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
-                </div>
-                
-                <div>
-                    <label class="block text-sm text-gray-400">Parameters (JSON) *</label>
-                    <textarea id="parameters" required rows="8" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-sm"></textarea>
-                </div>
-                
-                <div class="flex gap-2">
-                    <button type="submit" id="submitBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">Provision Model</button>
-                    <button type="button" id="clearBtn" onclick="resetForm()" class="bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition">Clear</button>
-                </div>
-                <p id="statusMsg" class="text-sm mt-2 hidden"></p>
-            </form>
+                <div id="storageList" class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4"></div>
+            </div>
+
         </div>
 
-        <div class="md:col-span-7 flex flex-col h-[calc(100vh-4rem)]">
-            
-            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-4 gap-4">
-                <h2 class="text-2xl font-bold text-green-400">Active Configurations</h2>
-                
+        <div class="md:col-span-7 flex flex-col h-full">
+            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-4 gap-4 shrink-0">
+                <div class="flex items-center gap-4">
+                    <h2 class="text-2xl font-bold text-green-400">Active Configurations</h2>
+                    <div class="flex items-center gap-2 bg-gray-800 p-1.5 px-3 rounded border border-gray-700 shadow-sm">
+                        <span class="text-xs font-bold text-gray-300 tracking-wider uppercase">RPC Mode</span>
+                        <div class="flex items-center mt-1">
+                            <input type="checkbox" id="rpcToggle" class="hidden toggle-checkbox" onchange="toggleRPCMode()">
+                            <label for="rpcToggle" class="toggle-label"></label>
+                        </div>
+                        </div>
+                </div>
                 <div class="flex items-center gap-4 w-full sm:w-auto">
-                    <input type="text" id="configSearch" oninput="filterConfigs()" placeholder="Search models..." class="w-full sm:w-64 bg-gray-900 border border-gray-700 rounded p-1.5 text-sm text-white focus:ring-blue-500 placeholder-gray-500">
+                    <input type="text" id="configSearch" oninput="filterConfigs()" placeholder="Search configs..." class="w-full sm:w-64 bg-gray-900 border border-gray-700 rounded p-1.5 text-sm text-white focus:ring-blue-500 placeholder-gray-500">
                     <span id="wsStatus" class="text-xs text-gray-500 flex items-center gap-1 whitespace-nowrap"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> Connecting...</span>
                 </div>
             </div>
             
-            <div id="configList" class="space-y-4 overflow-y-auto pr-2 pb-8 custom-scrollbar flex-1">
-                </div>
+            <div id="configList" class="space-y-4 overflow-y-auto pr-2 pb-4 custom-scrollbar flex-1"></div>
         </div>
+        
     </div>
 
     <script>
         let currentConfigs = [];
+        let localModels = [];
         let expandedConfigs = new Set();
+        let expandedStorage = new Set();
         let repoDebounceTimer;
+        let lastConfigStr = "";
+        let lastStorageStr = "";
+        let isRpcMode = false;
+
+        async function toggleRPCMode() {
+            const toggle = document.getElementById('rpcToggle');
+            toggle.disabled = true;
+
+            isRpcMode = toggle.checked;
+            renderConfigs();
+            try {
+                await fetch('/api/rpc_mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: toggle.checked })
+                });
+            } catch (e) {
+                alert("Failed to toggle RPC mode");
+                toggle.checked = !toggle.checked;
+                isRpcMode = toggle.checked;
+                renderConfigs();
+            }
+            toggle.disabled = false;
+        }
 
         const defaultParams = {
             "no-mmap": true,
@@ -123,42 +160,84 @@
             "temp": 0.6,
             "top-p": 0.95,
             "top-k": 40,
-            "min-p": 0,
+            "min-p": 0
         };
 
+        const paramInput = document.getElementById('parameters');
         const mmprojSelect = document.getElementById('mmproj');
         const symlinkInput = document.getElementById('symlink_name');
         
+        paramInput.value = JSON.stringify(defaultParams, null, 2);
+
         function updateMmprojJSON() {
             const val = mmprojSelect.value;
             const sym = symlinkInput.value || "model";
             try {
                 const parsed = JSON.parse(paramInput.value);
-                if (val) {
-                    parsed["mmproj"] = `/models/served/${sym}-mmproj.gguf`;
-                } else {
-                    delete parsed["mmproj"];
-                }
+                if (val) { parsed["mmproj"] = `/models/served/${sym}-mmproj.gguf`; } 
+                else { delete parsed["mmproj"]; }
                 paramInput.value = JSON.stringify(parsed, null, 2);
-                paramInput.dispatchEvent(new Event('input')); // Trigger validation glow
+                paramInput.dispatchEvent(new Event('input')); 
             } catch(e) {}
         }
 
         mmprojSelect.addEventListener('change', updateMmprojJSON);
         symlinkInput.addEventListener('input', updateMmprojJSON);
 
-        // --- WEBSOCKET CONNECTION ---
+        paramInput.addEventListener('input', function() {
+            if (!this.value.trim()) {
+                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-green-500', 'focus:ring-green-500');
+                this.classList.add('border-gray-600', 'focus:ring-blue-500');
+                return;
+            }
+            try {
+                JSON.parse(this.value);
+                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-gray-600', 'focus:ring-blue-500');
+                this.classList.add('border-green-500', 'focus:ring-green-500');
+            } catch (e) {
+                this.classList.remove('border-green-500', 'focus:ring-green-500', 'border-gray-600', 'focus:ring-blue-500');
+                this.classList.add('border-red-500', 'focus:ring-red-500');
+            }
+        });
+
+        paramInput.addEventListener('blur', function() {
+            if (!this.value.trim()) return;
+            try {
+                const parsed = JSON.parse(this.value);
+                this.value = JSON.stringify(parsed, null, 2);
+            } catch (e) {}
+        });
+
         function connectWS() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-            
             ws.onopen = () => document.getElementById('wsStatus').innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> Live Sync Active';
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'update') {
+                    const newConfigStr = JSON.stringify(msg.data);
+                    const newRpcMode = msg.rpc_mode || false;
+                    
+                    // Only skip render if BOTH the configs and the toggle state are identical
+                    if (newConfigStr === lastConfigStr && newRpcMode === isRpcMode) return; 
+                    
+                    // Prevent WebSocket from rubber-banding the switch while it is processing an API call
+                    if (!document.getElementById('rpcToggle').disabled) {
+                        isRpcMode = newRpcMode;
+                        document.getElementById('rpcToggle').checked = isRpcMode;
+                    }
+                    
+                    const prevDownloading = currentConfigs.filter(c => c.status === 'downloading').map(c => c.name);
+                    
                     currentConfigs = msg.data;
+                    lastConfigStr = newConfigStr;
                     renderConfigs();
-                    filterConfigs(); // Maintain search filter on updates
+                    filterConfigs();
+                    
+                    const nowDownloading = currentConfigs.filter(c => c.status === 'downloading').map(c => c.name);
+                    const downloadFinished = prevDownloading.some(name => !nowDownloading.includes(name));
+                    
+                    if (downloadFinished) { fetchLocalModels(); }
                 }
             };
             ws.onclose = () => {
@@ -168,24 +247,18 @@
         }
         connectWS();
 
-        // --- REPO AUTO-FETCH LOGIC ---
         document.getElementById('hf_repo').addEventListener('input', function(e) {
             clearTimeout(repoDebounceTimer);
             const repo = e.target.value.trim();
-            if (repo.includes('/')) {
-                repoDebounceTimer = setTimeout(() => fetchQuants(repo, true), 800);
-            }
+            if (repo.includes('/')) repoDebounceTimer = setTimeout(() => fetchQuants(repo, true), 800);
         });
 
         async function fetchQuants(repo, autoFillSymlink = false) {
             const quantSelect = document.getElementById('quant');
             const symInput = document.getElementById('symlink_name');
-            
-            // Auto-populate symlink name from repo if requested and field is empty
             if (autoFillSymlink && !symInput.value) {
                 symInput.value = repo.split('/').pop().replace('.gguf', '').replace('.GGUF', '');
             }
-
             quantSelect.innerHTML = '<option value="">Scanning Hugging Face...</option>';
             quantSelect.disabled = true;
 
@@ -200,7 +273,6 @@
                 }
 
                 quantSelect.innerHTML = '';
-                // Populate the dropdown (Array is already sorted largest to smallest by Python)
                 data.quants.forEach(q => {
                     const opt = document.createElement('option');
                     opt.value = q.name;
@@ -208,17 +280,13 @@
                     quantSelect.appendChild(opt);
                 });
 
-                // Find the absolute largest Q4 mathematically
                 const largestQ4 = data.quants.find(q => q.name.includes('Q4'));
-                // Fallback to the first item (the largest overall) if no Q4 exists
                 quantSelect.value = largestQ4 ? largestQ4.name : data.quants[0].name;
                 quantSelect.disabled = false;
 
-                // Populate the Vision Projector Dropdown
                 const mmprojContainer = document.getElementById('mmproj_container');
                 const mmprojSelect = document.getElementById('mmproj');
                 mmprojSelect.innerHTML = '<option value="">None</option>';
-                
                 if (data.mmprojs && data.mmprojs.length > 0) {
                     mmprojContainer.classList.remove('hidden');
                     data.mmprojs.forEach(q => {
@@ -235,13 +303,32 @@
             }
         }
 
-        // --- UI RENDER & FILTER LOGIC ---
+        async function fetchLocalModels() {
+            try {
+                const res = await fetch('/api/models');
+                const data = await res.json();
+                const newStorageStr = JSON.stringify(data.models || []);
+                if (newStorageStr !== lastStorageStr) {
+                    localModels = data.models || [];
+                    lastStorageStr = newStorageStr;
+                    renderStorage();
+                    filterStorage();
+                }
+            } catch (e) { console.error("Failed to fetch local models", e); }
+        }
+        fetchLocalModels();
+
         function filterConfigs() {
             const term = document.getElementById('configSearch').value.toLowerCase();
-            const cards = document.querySelectorAll('.config-card');
-            cards.forEach(card => {
-                const text = card.textContent.toLowerCase();
-                card.style.display = text.includes(term) ? '' : 'none';
+            document.querySelectorAll('.config-card').forEach(card => {
+                card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
+            });
+        }
+
+        function filterStorage() {
+            const term = document.getElementById('storageSearch').value.toLowerCase();
+            document.querySelectorAll('.storage-repo-card').forEach(card => {
+                card.style.display = card.textContent.toLowerCase().includes(term) ? '' : 'none';
             });
         }
 
@@ -252,18 +339,48 @@
             filterConfigs();
         }
 
+        function toggleStorageDetails(id) {
+            if (expandedStorage.has(id)) expandedStorage.delete(id);
+            else expandedStorage.add(id);
+            renderStorage();
+            filterStorage();
+        }
+
+        // SMART DOM REPLACEMENT: Stops thrashing the browser layout!
         function renderConfigs() {
             const list = document.getElementById('configList');
-            list.innerHTML = '';
-            if (currentConfigs.length === 0) { list.innerHTML = '<p class="text-gray-500 italic">No configs active.</p>'; return; }
             
+            const filteredConfigs = currentConfigs.filter(conf => {
+                // Check if the rpc key actually has a truthy value, not just if it exists
+                const hasRpc = !!(conf.params && conf.params.rpc); 
+                return isRpcMode ? hasRpc : !hasRpc;
+            });
+
+            if (filteredConfigs.length === 0) { 
+                list.innerHTML = `<p class="text-gray-500 italic">No matching configs found for ${isRpcMode ? 'RPC' : 'Local'} mode.</p>`; 
+                return; 
+            }
+            
+            // THE FIX: Nuke the container if the empty state text is present
+            if (list.querySelector('p.italic')) { list.innerHTML = ''; }
+
+            const currentNames = filteredConfigs.map(c => c.name);
+            Array.from(list.children).forEach(child => {
+                if (child.dataset && child.dataset.name && !currentNames.includes(child.dataset.name)) {
+                    child.remove();
+                }
+            });
+
             currentConfigs.forEach(conf => {
                 const isDownloading = conf.status === 'downloading';
                 const isError = conf.status === 'error';
-                const card = document.createElement('div');
-                card.className = `config-card bg-gray-800 p-4 rounded-lg shadow border ${isDownloading ? 'border-yellow-600' : isError ? 'border-red-600' : 'border-gray-700 hover:border-blue-500'} flex flex-col`;
-                card.dataset.name = conf.name;
+                const isMissing = conf.status === 'missing';
                 
+                let borderColor = 'border-gray-700 hover:border-blue-500';
+                if(isDownloading) borderColor = 'border-yellow-600';
+                else if(isError) borderColor = 'border-red-600';
+                else if(isMissing) borderColor = 'border-orange-600';
+
                 let statusBadge = '';
                 let progressUI = '';
 
@@ -272,8 +389,6 @@
                     if (conf.progress_str) {
                         const p = conf.progress_str;
                         const isExpanded = expandedConfigs.has(conf.name);
-                        
-                        // Removed static "Files" field
                         progressUI = `
                             <div class="mt-3 border-t border-gray-700 pt-3">
                                 <div class="flex justify-between items-center cursor-pointer hover:text-white text-gray-400 transition" onclick="toggleDetails('${conf.name}')">
@@ -296,6 +411,8 @@
                     }
                 } else if (isError) {
                     statusBadge = `<span class="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded border border-red-700">Error</span>`;
+                } else if (isMissing) {
+                    statusBadge = `<span class="text-xs bg-orange-900 text-orange-300 px-2 py-0.5 rounded border border-orange-700 animate-pulse">Missing Files</span>`;
                 }
 
                 const paramsHtml = Object.entries(conf.params).map(([k, v]) => 
@@ -312,18 +429,18 @@
                 } else if (!isDownloading) {
                     buttons = `
                         <div class="flex flex-col gap-2 ml-4 min-w-[80px]">
-                            <button onclick="duplicateConfig('${conf.name}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1 px-3 rounded">Duplicate</button>
-                            <button onclick="editConfig('${conf.name}')" class="bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-3 rounded">Edit</button>
-                            <button onclick="deleteConfig('${conf.name}')" class="bg-red-600 hover:bg-red-500 text-white text-xs py-1 px-3 rounded">Delete</button>
+                            <button onclick="duplicateConfig('${conf.name}')" class="bg-green-600 hover:bg-green-500 text-white text-xs py-1 px-3 rounded shadow transition">Duplicate</button>
+                            <button onclick="editConfig('${conf.name}')" class="bg-blue-600 hover:bg-blue-500 text-white text-xs py-1 px-3 rounded shadow transition">${isMissing ? 'Re-Download' : 'Edit'}</button>
+                            <button onclick="deleteConfig('${conf.name}')" class="bg-red-600 hover:bg-red-500 text-white text-xs py-1 px-3 rounded shadow transition">Delete</button>
                         </div>`;
                 }
 
-                card.innerHTML = `
+                const cardHTML = `
                     <div class="flex justify-between items-start">
                         <div class="flex-1 min-w-0">
                             <h3 class="text-lg font-bold text-white flex flex-wrap items-center gap-2">
                                 <span class="truncate">${conf.name}</span>
-                                <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded border border-blue-700 font-mono tracking-wider">${conf.quant}</span>
+                                <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded border border-blue-700 font-mono tracking-wider shadow-sm">${conf.quant}</span>
                                 ${statusBadge}
                             </h3>
                             <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${conf.repo}</p>
@@ -333,40 +450,100 @@
                     </div>
                     ${progressUI}
                 `;
-                list.appendChild(card);
+
+                // If card doesn't exist, create it. Otherwise, strictly replace innerHTML to prevent element recreation layout shifting
+                let card = list.querySelector(`.config-card[data-name="${conf.name}"]`);
+                if (!card) {
+                    card = document.createElement('div');
+                    card.dataset.name = conf.name;
+                    list.appendChild(card);
+                }
+
+                const newClassName = `config-card bg-gray-800 p-4 rounded-lg shadow border ${borderColor} flex flex-col`;
+                if (card.className !== newClassName) card.className = newClassName;
+                if (card.innerHTML !== cardHTML) card.innerHTML = cardHTML;
             });
         }
 
-        const paramInput = document.getElementById('parameters');
-        paramInput.value = JSON.stringify(defaultParams, null, 2);
+        // SMART DOM REPLACEMENT: For Storage Manager
+        // SMART DOM REPLACEMENT: For Storage Manager
+        function renderStorage() {
+            const list = document.getElementById('storageList');
+            if (localModels.length === 0) { 
+                list.innerHTML = '<p class="text-gray-500 italic">No downloaded models found on disk.</p>'; 
+                return; 
+            }
+            if (list.querySelector('p.italic')) { list.innerHTML = ''; }
 
-        // Real-time validation while typing
-        paramInput.addEventListener('input', function() {
-            if (!this.value.trim()) {
-                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-green-500', 'focus:ring-green-500');
-                this.classList.add('border-gray-600', 'focus:ring-blue-500');
-                return;
-            }
-            try {
-                JSON.parse(this.value);
-                this.classList.remove('border-red-500', 'focus:ring-red-500', 'border-gray-600', 'focus:ring-blue-500');
-                this.classList.add('border-green-500', 'focus:ring-green-500');
-            } catch (e) {
-                this.classList.remove('border-green-500', 'focus:ring-green-500', 'border-gray-600', 'focus:ring-blue-500');
-                this.classList.add('border-red-500', 'focus:ring-red-500');
-            }
-        });
+            const currentRepos = localModels.map(m => m.repo);
+            Array.from(list.children).forEach(child => {
+                if (child.dataset && child.dataset.repo && !currentRepos.includes(child.dataset.repo)) {
+                    child.remove();
+                }
+            });
 
-        // Structural auto-formatting only when clicking away
-        paramInput.addEventListener('blur', function() {
-            if (!this.value.trim()) return;
-            try {
-                const parsed = JSON.parse(this.value);
-                this.value = JSON.stringify(parsed, null, 2);
-            } catch (e) {
-                // Ignore formatting if it's currently invalid
+            localModels.forEach(repoData => {
+                let innerHTML = `<h3 class="text-md font-bold text-gray-300 mb-3 truncate border-b border-gray-700 pb-2">${repoData.repo}</h3><div class="space-y-3">`;
+
+                const renderItem = (item, isMmproj) => {
+                    const blockId = `${repoData.repo}-${item.quant}-${isMmproj}`;
+                    const isExpanded = expandedStorage.has(blockId);
+                    
+                    let filesHtml = '';
+                    if (isExpanded) {
+                        filesHtml = `<div class="mt-2 pl-4 space-y-1 border-l-2 border-gray-700">`;
+                        item.files.forEach(f => {
+                            filesHtml += `<div class="flex justify-between text-xs text-gray-400 font-mono"><span>${f.name}</span><span>${f.size_str}</span></div>`;
+                        });
+                        filesHtml += `</div>`;
+                    }
+
+                    return `
+                        <div class="storage-file-row bg-gray-800 p-3 rounded border border-gray-700">
+                            <div class="flex justify-between items-center gap-2">
+                                <div class="flex items-center gap-2 sm:gap-3 cursor-pointer file-expand-icon text-gray-400 flex-1 min-w-0" onclick="toggleStorageDetails('${blockId}')">
+                                    <span class="text-xs ${isMmproj ? 'bg-purple-900 text-purple-300 border-purple-700' : 'bg-green-900 text-green-300 border-green-700'} px-2 py-1 rounded border font-mono tracking-wider shadow-sm truncate">${item.quant} ${isMmproj ? '(Vision)' : ''}</span>
+                                    <span class="text-sm font-mono whitespace-nowrap">${item.size_str}</span>
+                                    <span class="text-xs shrink-0">${isExpanded ? '▲' : '▼'}</span>
+                                </div>
+                                <button onclick="deletePhysicalModel('${repoData.repo}', '${item.quant}', ${isMmproj})" class="text-xs bg-red-600 hover:bg-red-500 text-white py-1 px-2 sm:py-1.5 sm:px-3 rounded shadow transition shrink-0">Delete</button>
+                            </div>
+                            ${filesHtml}
+                        </div>
+                    `;
+                };
+
+                repoData.quants.forEach(q => innerHTML += renderItem(q, false));
+                repoData.mmprojs.forEach(m => innerHTML += renderItem(m, true));
+                innerHTML += `</div>`;
+
+                let repoGroup = list.querySelector(`.storage-repo-card[data-repo="${repoData.repo}"]`);
+                if (!repoGroup) {
+                    repoGroup = document.createElement('div');
+                    repoGroup.className = 'storage-repo-card bg-gray-900 p-4 rounded-lg shadow border border-gray-700 mb-4';
+                    repoGroup.dataset.repo = repoData.repo;
+                    list.appendChild(repoGroup);
+                }
+
+                if (repoGroup.innerHTML !== innerHTML) {
+                    repoGroup.innerHTML = innerHTML;
+                }
+            });
+        }
+
+        async function deletePhysicalModel(repo, quant, isMmproj) {
+            if(confirm(`WARNING: This permanently deletes the physical ${quant} files for ${repo} from your hard drive.\n\nAny Active Configurations using this quant will be flagged as Missing.\n\nProceed with deletion?`)) {
+                try {
+                    const res = await fetch(`/api/models/delete`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ repo, quant, is_mmproj: isMmproj })
+                    });
+                    if(res.ok) { fetchLocalModels(); } 
+                    else { alert("Failed to delete model files."); }
+                } catch(e) { console.error(e); }
             }
-        });
+        }
 
         async function duplicateConfig(name) {
             const conf = currentConfigs.find(c => c.name === name);
@@ -374,14 +551,13 @@
             resetForm();
             document.getElementById('formTitle').textContent = `Duplicate Config: ${name}`;
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-green-400";
-            
             document.getElementById('hf_repo').value = conf.repo;
-            await fetchQuants(conf.repo, false); // Fetch quants but don't overwrite symlink
+            await fetchQuants(conf.repo, false);
             document.getElementById('quant').value = conf.quant;
-            
+            document.getElementById('mmproj').value = conf.mmproj || "";
             document.getElementById('symlink_name').value = conf.name + "-COPY";
             document.getElementById('submitBtn').textContent = "Provision Duplicate";
-            document.getElementById('submitBtn').className = "flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded transition";
+            document.getElementById('submitBtn').className = "flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Cancel";
             document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -392,17 +568,16 @@
             if(!conf) return;
             document.getElementById('formTitle').textContent = `Edit Config: ${name}`;
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-yellow-400";
-            
             document.getElementById('hf_repo').value = conf.repo;
-            await fetchQuants(conf.repo, false); // Fetch quants but don't overwrite symlink
+            await fetchQuants(conf.repo, false);
             document.getElementById('quant').value = conf.quant;
-            
+            document.getElementById('mmproj').value = conf.mmproj || ""; 
             document.getElementById('symlink_name').value = conf.name;
             document.getElementById('original_name').value = conf.name;
-            document.getElementById('submitBtn').textContent = "Update Config";
-            document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition";
+            document.getElementById('submitBtn').textContent = "Update / Re-Download";
+            document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Cancel Edit";
-            document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition";
+            document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition shadow";
             document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -412,21 +587,23 @@
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-blue-400";
             document.getElementById('setupForm').reset();
             document.getElementById('original_name').value = ''; 
-            
             document.getElementById('quant').innerHTML = '<option value="">Paste repo above to load quants...</option>';
             document.getElementById('quant').disabled = true;
-
+            document.getElementById('mmproj_container').classList.add('hidden');
             document.getElementById('submitBtn').textContent = "Provision Model";
-            document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition";
+            document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Clear";
-            document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition";
-            
-            document.getElementById('parameters').value = JSON.stringify(defaultParams, null, 2);;
+            document.getElementById('clearBtn').className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition shadow";
+            document.getElementById('parameters').value = JSON.stringify(defaultParams, null, 2);
             document.getElementById('statusMsg').className = "hidden";
+            
+            const paramInput = document.getElementById('parameters');
+            paramInput.classList.remove('border-red-500', 'focus:ring-red-500', 'border-green-500', 'focus:ring-green-500');
+            paramInput.classList.add('border-gray-600', 'focus:ring-blue-500');
         }
 
         async function deleteConfig(name) {
-            if(confirm(`Delete ${name}?`)) {
+            if(confirm(`Delete configuration ${name}? (Physical model files will remain on disk)`)) {
                 await fetch(`/api/configs/${name}`, { method: 'DELETE' });
                 if(document.getElementById('original_name').value === name) resetForm();
             }
@@ -449,17 +626,23 @@
                 parameters: document.getElementById('parameters').value
             };
 
-            const res = await fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-            const data = await res.json();
-            
-            if(res.ok) {
-                const isWarning = data.status.includes('Warning');
-                status.className = `text-sm mt-2 ${isWarning ? 'text-yellow-400 font-bold' : 'text-green-400'} block`;
-                status.textContent = data.status;
-                setTimeout(() => { resetForm(); btn.disabled = false; btn.classList.remove('opacity-50'); }, 3500);
-            } else {
+            try {
+                const res = await fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const data = await res.json();
+                
+                if(res.ok) {
+                    const isWarning = data.status.includes('Warning');
+                    status.className = `text-sm mt-2 ${isWarning ? 'text-yellow-400 font-bold' : 'text-green-400'} block`;
+                    status.textContent = data.status;
+                    setTimeout(() => { resetForm(); btn.disabled = false; btn.classList.remove('opacity-50'); fetchLocalModels(); }, 3500);
+                } else {
+                    status.className = "text-sm mt-2 text-red-400 block font-bold";
+                    status.textContent = "Error: " + (data.detail || "Invalid parameters");
+                    btn.disabled = false; btn.classList.remove('opacity-50');
+                }
+            } catch(e) {
                 status.className = "text-sm mt-2 text-red-400 block font-bold";
-                status.textContent = "Error: " + (data.detail || "Invalid parameters");
+                status.textContent = "Network error occurred.";
                 btn.disabled = false; btn.classList.remove('opacity-50');
             }
         });
