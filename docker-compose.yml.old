@@ -3,6 +3,9 @@ networks:
 
 services:
   llm-model-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: local/llm-model-manager:latest
     container_name: llm-model-manager
     restart: unless-stopped
@@ -23,9 +26,8 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
 
-
   llama-cpp:
-    image: ghcr.io/ggml-org/llama.cpp:full-cuda
+    image: custom-llama-rpc
     container_name: llama-cpp
     restart: unless-stopped
     environment:
@@ -37,7 +39,6 @@ services:
     volumes:
       - ${MODELS}:/models
     command: >
-      --server
       --models-preset /models/served/models.ini
       --models-max 4
       --host 0.0.0.0
@@ -49,3 +50,5 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"

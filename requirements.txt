@@ -4,3 +4,4 @@ pydantic
 websockets
 aiofiles
 huggingface_hub[cli,hf_transfer]
+pyyaml

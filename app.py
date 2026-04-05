@@ -9,7 +9,7 @@ import threading
 import os
 import sys
 import glob
-import configparser
+import yaml
 import json
 import shutil
 import asyncio
@@ -31,9 +31,20 @@ logger.info(f"Model Manager booted. Log level set to: {log_level_str}")
 
 CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
-INI_PATH = os.path.join(SERVED_DIR, "models.ini")
+CONFIG_PATH = os.path.join(SERVED_DIR, "config.yaml")
 STATE_FILE = os.path.join(SERVED_DIR, "state.json")
 QUANT_REGEX = r'[-._]((?:UD-)?[A-Za-z]*Q[0-9][A-Za-z0-9_]*|BF16|F16|F32|MXFP4_MOE)(?:-\d{5}-of-\d{5})?\.gguf$'
+
+# llama-server short flags (single dash) — everything else uses double dash
+LLAMA_SHORT_FLAGS = {
+    "a", "b", "bs", "c", "cb", "cd", "cl", "cmoe", "cmoed", "cpent", "cram",
+    "ctk", "ctkd", "ctv", "ctvd", "ctxcp", "dev", "devd", "dio", "dr", "dt",
+    "e", "fa", "fit", "fitc", "fitt", "h", "hf", "hfd", "hff", "hffv", "hft",
+    "hfv", "j", "jf", "kvo", "kvu", "l", "lcd", "lcs", "lv", "m", "md", "mg",
+    "mm", "mmu", "mu", "mv", "n", "ncmoe", "ngl", "ngld", "np", "ot", "otd",
+    "r", "rea", "s", "sm", "sp", "sps", "t", "tb", "tbd", "td", "to", "ts",
+    "ub", "v",
+}
 
 class ModelSetup(BaseModel):
     hf_repo: str
@@ -75,36 +86,35 @@ def sync_system(state):
     for f in glob.glob(os.path.join(SERVED_DIR, "*.gguf")):
         try: os.unlink(f)
         except: pass
-        
-    config = configparser.ConfigParser(allow_no_value=True)
-    config.optionxform = str
+
+    swap_models = {}
     state_changed = False
 
     rpc_mode = state.get("_meta", {}).get("rpc_mode", False)
-    
+
     for name, data in state.items():
         if name == "_meta" or data.get("status") in ["downloading", "error"]: continue
 
         has_rpc = bool(data.get("params", {}).get("rpc"))
         if rpc_mode and not has_rpc: continue
         if not rpc_mode and has_rpc: continue
-            
+
         repo, quant, params = data["repo"], data["quant"], data["params"]
         mmproj = data.get("mmproj", "")
         logger.debug(f"Processing config: {name} ({quant}) from {repo}")
 
         search_pattern = f"{CACHE_DIR}/models--{repo.replace('/', '--')}/**/*.gguf"
         all_files = glob.glob(search_pattern, recursive=True)
-        
+
         files = []
         for f in all_files:
             if "mmproj" in f.lower(): continue
             match = re.search(QUANT_REGEX, f, re.IGNORECASE)
             if match and match.group(1).upper() == quant.upper():
                 files.append(f)
-                
+
         files = sorted(files)
-        
+
         mmproj_missing = False
         if mmproj:
             found_mmproj = False
@@ -128,9 +138,6 @@ def sync_system(state):
                 data["status"] = "ready"
                 state_changed = True
 
-        section_name = f"{name}-{quant}"
-        config.add_section(section_name)
-        
         first_shard = None
         for f in files:
             match = re.search(r'(-\d{5}-of-\d{5}\.gguf)$', f, re.IGNORECASE)
@@ -145,8 +152,11 @@ def sync_system(state):
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
                 os.symlink(f, symlink_path)
                 if not first_shard: first_shard = symlink_path
-                    
-        config.set(section_name, "model", first_shard or files[0])
+
+        model_path = first_shard or files[0]
+
+        # Build llama-server CLI args from params
+        cmd_args = ["llama-server", "--model", model_path, "--host", "0.0.0.0", "--port", "${PORT}"]
 
         if mmproj:
             for f in all_files:
@@ -155,27 +165,35 @@ def sync_system(state):
                     if match and match.group(1).upper() == mmproj.upper():
                         mmproj_path = os.path.join(SERVED_DIR, f"{name}-mmproj.gguf")
                         os.symlink(f, mmproj_path)
+                        cmd_args.extend(["--mmproj", mmproj_path])
                         logger.debug(f"Created mmproj symlink: {mmproj_path}")
                         break
-        
-        for k, v in params.items():
-            if v is None: config.set(section_name, k, "true")
-            elif isinstance(v, (dict, list)): config.set(section_name, k, json.dumps(v))
-            elif isinstance(v, bool): config.set(section_name, k, str(v).lower())
-            else: config.set(section_name, k, str(v))
-                
-    if state_changed: save_state(state)
-    with open(INI_PATH, 'w') as f: config.write(f)
-    logger.info("models.ini successfully rewritten.")
 
-def restart_llama_container():
-    container_name = os.environ.get("LLAMA_CONTAINER_NAME", "llama-cpp")
-    logger.info(f"Issuing restart command to container: {container_name}")
-    try:
-        subprocess.run(["curl", "-s", "--unix-socket", "/var/run/docker.sock", "-X", "POST", f"http://localhost/containers/{container_name}/restart"], check=True)
-        logger.info(f"{container_name} restarted successfully.")
-    except Exception as e:
-        logger.error(f"Failed to restart {container_name}: {e}")
+        for k, v in params.items():
+            if k in ("host", "port", "model", "mmproj"):
+                continue
+            flag = f"-{k}" if k in LLAMA_SHORT_FLAGS else f"--{k}"
+            if v is None or (isinstance(v, bool) and v):
+                cmd_args.append(flag)
+            elif isinstance(v, bool) and not v:
+                continue
+            elif isinstance(v, (dict, list)):
+                cmd_args.extend([flag, json.dumps(v)])
+            else:
+                cmd_args.extend([flag, str(v)])
+
+        model_id = f"{name}-{quant}"
+        swap_models[model_id] = {
+            "cmd": " ".join(cmd_args),
+            "proxy": "http://127.0.0.1:${PORT}",
+        }
+
+    if state_changed: save_state(state)
+
+    swap_config = {"models": swap_models}
+    with open(CONFIG_PATH, 'w') as f: yaml.dump(swap_config, f, default_flow_style=False, sort_keys=False)
+    logger.info("llama-swap config.yaml successfully rewritten.")
+
 
 # --- WEBSOCKET MANAGER ---
 class ConnectionManager:
@@ -290,7 +308,6 @@ snapshot_download(
             state[req.symlink_name]["status"] = "ready"
             save_state(state)
         sync_system(state)
-        restart_llama_container()
     else:
         err_text = "".join(error_log[-10:]).replace('\n', ' ')
         exc_match = re.search(r'([A-Za-z]+Error:.*)', err_text)
@@ -306,6 +323,7 @@ snapshot_download(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state = load_state()
+    sync_system(state)
     resumed = 0
     for name, data in state.items():
         if data.get("status") == "downloading":
@@ -426,7 +444,6 @@ async def toggle_rpc(req: RpcModeReq):
     state["_meta"]["rpc_mode"] = req.enabled
     save_state(state)
     sync_system(state)
-    restart_llama_container()
     return {"status": f"RPC mode enabled: {req.enabled}"}
 
 @app.post("/api/models/delete")
@@ -449,7 +466,6 @@ async def delete_local_model(req: DeleteModelReq):
     if deleted:
         state = load_state()
         sync_system(state)
-        restart_llama_container()
         return {"status": "Deleted successfully"}
     raise HTTPException(status_code=404, detail="Files not found on disk")
 
@@ -520,8 +536,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     else:
         logger.info(f"Model {req.symlink_name} already downloaded. Updating config directly.")
         sync_system(state)
-        restart_llama_container()
-        return {"status": "Config updated and container restarted!"}
+        return {"status": "Config updated!"}
 
 @app.delete("/api/configs/{symlink_name}")
 async def delete_config(symlink_name: str):
@@ -531,5 +546,4 @@ async def delete_config(symlink_name: str):
         del state[symlink_name]
         save_state(state)
         sync_system(state)
-        restart_llama_container()
     return {"status": "Config deleted!"}
