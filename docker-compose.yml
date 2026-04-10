@@ -27,8 +27,8 @@ services:
   llama-swap:
     build:
       context: .
-      dockerfile: Dockerfile.llama
-    image: local/llama-swap:latest
+      dockerfile: Dockerfile.llama.cuda
+    image: local/llama-swap:cuda
     container_name: llama-swap
     restart: unless-stopped
     ports:
