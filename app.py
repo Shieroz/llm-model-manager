@@ -11,12 +11,14 @@ import sys
 import glob
 import yaml
 import json
+import shlex
 import shutil
 import asyncio
 import pty
 import re
 import time
 import logging
+import docker as docker_sdk
 
 log_level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
 log_level = getattr(logging, log_level_str, logging.INFO)
@@ -33,6 +35,7 @@ CACHE_DIR = "/models/.cache"
 SERVED_DIR = "/models/served"
 CONFIG_PATH = os.path.join(SERVED_DIR, "config.yaml")
 STATE_FILE = os.path.join(SERVED_DIR, "state.json")
+LLAMA_SWAP_CONTAINER = os.environ.get("LLAMA_SWAP_CONTAINER", "llama-swap")
 QUANT_REGEX = r'[-._]((?:UD-)?[A-Za-z]*Q[0-9][A-Za-z0-9_]*|BF16|F16|F32|MXFP4_MOE)(?:-\d{5}-of-\d{5})?\.gguf$'
 
 # llama-server short flags (single dash) — everything else uses double dash
@@ -80,7 +83,16 @@ def save_state(state):
     os.makedirs(SERVED_DIR, exist_ok=True)
     with open(STATE_FILE, "w") as f: json.dump(state, f, indent=2)
 
-def sync_system(state):
+def restart_llama_swap():
+    try:
+        client = docker_sdk.from_env()
+        container = client.containers.get(LLAMA_SWAP_CONTAINER)
+        container.restart()
+        logger.info(f"Restarted {LLAMA_SWAP_CONTAINER} to apply new config.")
+    except Exception as e:
+        logger.error(f"Failed to restart {LLAMA_SWAP_CONTAINER}: {e}")
+
+def sync_system(state, restart=True):
     logger.info("Syncing system state and regenerating symlinks...")
     os.makedirs(SERVED_DIR, exist_ok=True)
     for f in glob.glob(os.path.join(SERVED_DIR, "*.gguf")):
@@ -178,13 +190,17 @@ def sync_system(state):
             elif isinstance(v, bool) and not v:
                 continue
             elif isinstance(v, (dict, list)):
-                cmd_args.extend([flag, json.dumps(v)])
+                cmd_args.extend([flag, shlex.quote(json.dumps(v))])
             else:
                 cmd_args.extend([flag, str(v)])
 
         model_id = f"{name}-{quant}"
+        inner_cmd = " ".join(cmd_args)
+        # Forward llama-server stdout+stderr to container PID 1 stdout so they
+        # appear in `docker logs`. exec replaces the shell so signals pass through.
+        wrapped_cmd = f"sh -c 'exec {inner_cmd} >/proc/1/fd/1 2>&1'"
         swap_models[model_id] = {
-            "cmd": " ".join(cmd_args),
+            "cmd": wrapped_cmd,
             "proxy": "http://127.0.0.1:${PORT}",
         }
 
@@ -193,6 +209,8 @@ def sync_system(state):
     swap_config = {"models": swap_models}
     with open(CONFIG_PATH, 'w') as f: yaml.dump(swap_config, f, default_flow_style=False, sort_keys=False)
     logger.info("llama-swap config.yaml successfully rewritten.")
+    if restart:
+        threading.Thread(target=restart_llama_swap, daemon=True).start()
 
 
 # --- WEBSOCKET MANAGER ---
@@ -323,7 +341,7 @@ snapshot_download(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state = load_state()
-    sync_system(state)
+    sync_system(state, restart=False)
     resumed = 0
     for name, data in state.items():
         if data.get("status") == "downloading":
