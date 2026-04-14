@@ -9,8 +9,11 @@ case "$BACKEND" in
   cuda)
     OVERRIDE="docker-compose.cuda.yml"
     ;;
+  sycl)
+    OVERRIDE="compose.sycl.yml"
+    ;;
   *)
-    echo "Unknown LLAMA_BACKEND: $BACKEND (expected 'cuda' or 'vulkan')"
+    echo "Unknown LLAMA_BACKEND: $BACKEND (expected 'cuda', 'vulkan' or 'sycl)"
     exit 1
     ;;
 esac
