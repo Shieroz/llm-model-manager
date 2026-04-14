@@ -29,8 +29,8 @@ services:
   llama-swap:
     build:
       context: .
-      dockerfile: Dockerfile.llama.cuda
-    image: local/llama-swap:cuda
+      dockerfile: ${LLAMA_DOCKERFILE:-Dockerfile.llama.cuda}
+    image: local/llama-swap:${LLAMA_BACKEND:-cuda}
     container_name: llama-swap
     restart: unless-stopped
     ports:
@@ -40,10 +40,3 @@ services:
     volumes:
       - ${MODELS}:/models
     command: --config /models/served/config.yaml
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]

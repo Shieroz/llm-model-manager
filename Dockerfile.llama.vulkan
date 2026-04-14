@@ -1,31 +1,48 @@
 # Stage 1: Build llama-server with Vulkan support
-FROM nvidia/cuda:13.1.0-devel-ubuntu24.04 AS builder
+ARG UBUNTU_VERSION=26.04
+FROM ubuntu:$UBUNTU_VERSION AS builder
 
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
     libcurl4-openssl-dev \
+    libssl-dev \
+    libvulkan-dev \
+    glslc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 RUN git clone https://github.com/ggml-org/llama.cpp.git .
 
-# Build with Vulkan support
 RUN cmake -B build \
+    -DGGML_NATIVE=OFF \
     -DGGML_VULKAN=ON \
     -DGGML_RPC=ON \
+    -DGGML_BACKEND_DL=ON \
+    -DGGML_CPU_ALL_VARIANTS=ON \
+    -DLLAMA_BUILD_TESTS=OFF \
     -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --config Release -j$(nproc) --target llama-server
 
+# Collect shared libraries (Vulkan backend .so files)
+RUN mkdir -p /app/lib && \
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
+
 # Stage 2: Vulkan runtime + llama-swap binary + custom llama-server
-FROM nvidia/cuda:13.1.0-runtime-ubuntu24.04
+FROM ubuntu:$UBUNTU_VERSION
 
 RUN apt-get update && apt-get install -y \
     libcurl4 \
     libgomp1 \
     curl \
+    libvulkan1 \
+    mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy Vulkan backend shared libraries
+COPY --from=builder /app/lib/ /usr/local/lib/
+RUN ldconfig
 
 COPY --from=ghcr.io/mostlygeek/llama-swap:vulkan /app/llama-swap /usr/local/bin/llama-swap
 COPY --from=builder /app/build/bin/llama-server /usr/local/bin/llama-server
