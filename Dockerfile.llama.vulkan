@@ -19,8 +19,6 @@ RUN cmake -B build \
     -DGGML_NATIVE=OFF \
     -DGGML_VULKAN=ON \
     -DGGML_RPC=ON \
-    -DGGML_BACKEND_DL=ON \
-    -DGGML_CPU_ALL_VARIANTS=ON \
     -DLLAMA_BUILD_TESTS=OFF \
     -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build --config Release -j$(nproc) --target llama-server
