@@ -1,0 +1,5 @@
+services:
+  llama-swap:
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      - /dev/dri/card0:/dev/dri/card0
