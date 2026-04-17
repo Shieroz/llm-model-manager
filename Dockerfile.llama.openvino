@@ -1,0 +1,80 @@
+# Stage 1: Build llama-server with OpenVINO support
+ARG UBUNTU_VERSION=24.04
+ARG OPENVINO_VERSION_MAJOR=2026.0
+ARG OPENVINO_VERSION_FULL=2026.0.0.20965.c6d6a13a886
+
+FROM ubuntu:$UBUNTU_VERSION AS builder
+
+ARG OPENVINO_VERSION_MAJOR
+ARG OPENVINO_VERSION_FULL
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    wget \
+    ca-certificates \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    libtbb12 \
+    ocl-icd-opencl-dev \
+    opencl-headers \
+    opencl-clhpp-headers \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenVINO
+RUN mkdir -p /opt/intel && \
+    wget https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
+    tar -xf openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz && \
+    mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
+    cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} && \
+    echo "Y" | ./install_dependencies/install_openvino_dependencies.sh && \
+    cd - && \
+    ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino && \
+    rm -f openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz
+
+ENV OpenVINO_DIR=/opt/intel/openvino
+
+WORKDIR /app
+RUN git clone https://github.com/ggml-org/llama.cpp.git .
+
+RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
+    cmake -B build -G Ninja \
+        -DGGML_NATIVE=OFF \
+        -DGGML_OPENVINO=ON \
+        -DGGML_RPC=ON \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j$(nproc)"
+
+# Collect shared libraries (OpenVINO + CPU backend .so files)
+RUN mkdir -p /app/lib && \
+    find build -name "*.so*" -exec cp -P {} /app/lib \; && \
+    find ${OpenVINO_DIR}/runtime/lib/intel64 -name "*.so*" -exec cp -P {} /app/lib \; 2>/dev/null || \
+    find ${OpenVINO_DIR}/lib/intel64 -name "*.so*" -exec cp -P {} /app/lib \;
+
+# Stage 2: OpenVINO runtime + llama-swap
+FROM ubuntu:$UBUNTU_VERSION
+
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    libcurl4 \
+    libtbb12 \
+    curl \
+    && apt autoremove -y \
+    && apt clean -y \
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
+    && find /var/cache -type f -delete
+
+# Copy backend shared libraries next to the binary
+COPY --from=builder /app/lib/ /usr/local/bin/
+
+COPY --from=ghcr.io/mostlygeek/llama-swap:intel /app/llama-swap /usr/local/bin/llama-swap
+COPY --from=builder /app/build/bin/llama-server /usr/local/bin/llama-server
+ENV LD_LIBRARY_PATH=/usr/local/bin
+
+ENTRYPOINT ["llama-swap"]

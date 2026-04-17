@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN git clone https://github.com/ggml-org/llama.cpp.git .
+# RUN git clone https://github.com/ggml-org/llama.cpp.git .
+
+# Issues Solve Branch
+RUN git clone --branch fix/q8_0-reorder-dequantize https://github.com/PMZFX/llama.cpp.git .
 
 RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" \
