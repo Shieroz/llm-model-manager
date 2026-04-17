@@ -157,12 +157,18 @@ def sync_system(state, restart=True):
                 suffix = match.group(1)
                 symlink_filename = f"{name}-{quant}{suffix}"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
-                os.symlink(f, symlink_path)
+                try:
+                    os.symlink(f, symlink_path)
+                except FileExistsError:
+                    pass
                 if "-00001-of-" in suffix: first_shard = symlink_path
             else:
                 symlink_filename = f"{name}-{quant}.gguf"
                 symlink_path = os.path.join(SERVED_DIR, symlink_filename)
-                os.symlink(f, symlink_path)
+                try:
+                    os.symlink(f, symlink_path)
+                except FileExistsError:
+                    pass
                 if not first_shard: first_shard = symlink_path
 
         model_path = first_shard or files[0]
@@ -190,7 +196,12 @@ def sync_system(state, restart=True):
             elif isinstance(v, bool) and not v:
                 continue
             elif isinstance(v, (dict, list)):
-                cmd_args.extend([flag, shlex.quote(json.dumps(v))])
+                # Embed JSON in double quotes with escaped inner quotes so the inner
+                # sh (inside the outer sh -c '...') preserves the double quotes instead
+                # of stripping them during word processing.
+                json_str = json.dumps(v, separators=(',', ':'))
+                escaped = json_str.replace('\\', '\\\\').replace('"', '\\"')
+                cmd_args.extend([flag, f'"{escaped}"'])
             else:
                 cmd_args.extend([flag, str(v)])
 
@@ -466,26 +477,49 @@ async def toggle_rpc(req: RpcModeReq):
 
 @app.post("/api/models/delete")
 async def delete_local_model(req: DeleteModelReq):
-    search_pattern = f"{CACHE_DIR}/models--{req.repo.replace('/', '--')}/**/*.gguf"
-    deleted = False
+    repo_dir = os.path.join(CACHE_DIR, f"models--{req.repo.replace('/', '--')}")
+    search_pattern = os.path.join(repo_dir, "**/*.gguf")
+
+    blobs_to_delete = set()
+    symlinks_to_delete = []
+
     for f in glob.glob(search_pattern, recursive=True):
         filename = os.path.basename(f)
         match = re.search(QUANT_REGEX, filename, re.IGNORECASE)
         if not match: continue
         if match.group(1).upper() != req.quant.upper(): continue
-        
         is_mmproj_file = "mmproj" in filename.lower()
-        if is_mmproj_file == req.is_mmproj:
-            try:
-                os.remove(f)
-                deleted = True
-            except: pass
-            
-    if deleted:
-        state = load_state()
-        sync_system(state)
-        return {"status": "Deleted successfully"}
-    raise HTTPException(status_code=404, detail="Files not found on disk")
+        if is_mmproj_file != req.is_mmproj: continue
+
+        symlinks_to_delete.append(f)
+        if os.path.islink(f):
+            blob_path = os.path.realpath(f)
+            if blob_path.startswith(repo_dir):
+                blobs_to_delete.add(blob_path)
+
+    if not symlinks_to_delete:
+        raise HTTPException(status_code=404, detail="Files not found on disk")
+
+    for path in blobs_to_delete | set(symlinks_to_delete):
+        try: os.remove(path)
+        except: pass
+
+    # Remove snapshot dirs that are now empty
+    snapshots_dir = os.path.join(repo_dir, "snapshots")
+    if os.path.isdir(snapshots_dir):
+        for entry in os.listdir(snapshots_dir):
+            entry_path = os.path.join(snapshots_dir, entry)
+            if os.path.isdir(entry_path) and not os.listdir(entry_path):
+                shutil.rmtree(entry_path, ignore_errors=True)
+
+    # Remove the entire repo cache dir if no blob files remain
+    remaining_blobs = [f for f in glob.glob(os.path.join(repo_dir, "**/*"), recursive=True) if os.path.isfile(f)]
+    if not remaining_blobs:
+        shutil.rmtree(repo_dir, ignore_errors=True)
+
+    state = load_state()
+    sync_system(state)
+    return {"status": "Deleted successfully"}
 
 @app.post("/api/setup")
 async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
