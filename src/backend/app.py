@@ -522,14 +522,14 @@ async def lifespan(app: FastAPI):
     broadcast_task.cancel()
 
 app = FastAPI(title="Local LLM Model Manager", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 # --- API ---
 @app.get("/")
-async def serve_ui(): return FileResponse("index.html")
+async def serve_ui(): return FileResponse("frontend/index.html")
 
 @app.get("/favicon.ico", include_in_schema=False)
-async def favicon(): return FileResponse("favicon.ico")
+async def favicon(): return FileResponse("frontend/favicon.ico")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

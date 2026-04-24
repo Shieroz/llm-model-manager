@@ -17,14 +17,13 @@ services:
     volumes:
       - ${MODELS}:/models
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./app.py:/app/app.py
+      - ./src:/app
+    command: ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
 
   llama-swap:
     build:
