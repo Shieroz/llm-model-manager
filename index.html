@@ -55,6 +55,16 @@
                         <input type="text" id="hf_repo" placeholder="unsloth/Qwen3.5-0.8B-GGUF" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
                     </div>
                     <div>
+                        <label class="block text-sm text-gray-400">Commit (Revision)</label>
+                        <div class="flex gap-2 mt-1">
+                            <select id="commit_select" class="flex-1 bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500">
+                                <option value="latest">Latest (main branch)</option>
+                            </select>
+                            <input type="text" id="commit_sha" placeholder="or enter SHA..." class="flex-1 bg-gray-700 border-gray-600 rounded p-2 text-white font-mono text-xs focus:ring-blue-500">
+                        </div>
+                        <div id="commit_info" class="text-xs text-gray-500 mt-1 hidden"></div>
+                    </div>
+                    <div>
                         <label class="block text-sm text-gray-400">Quantization *</label>
                         <select id="quant" required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500 disabled:opacity-50">
                             <option value="">Paste repo above to load quants...</option>
@@ -148,6 +158,92 @@
             toggle.disabled = false;
         }
 
+        let lastCommitsStr = "";
+
+        async function fetchCommits(repo, currentSha = null) {
+            const select = document.getElementById('commit_select');
+            const info = document.getElementById('commit_info');
+            try {
+                const res = await fetch(`/api/commits?repo=${encodeURIComponent(repo)}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const newCommitsStr = JSON.stringify(data.commits || []);
+                if (newCommitsStr === lastCommitsStr) return;
+                lastCommitsStr = newCommitsStr;
+
+                select.innerHTML = '';
+                if (!data.commits || data.commits.length === 0) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'No commits found';
+                    select.appendChild(opt);
+                    info.classList.remove('hidden');
+                    info.textContent = 'No commits found';
+                    info.className = 'text-xs text-yellow-500 mt-1';
+                    return;
+                }
+                data.commits.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.sha;
+                    const label = c.sha.substring(0, 12);
+                    const isCurrent = currentSha && c.sha === currentSha;
+                    const isPinned = c.pinned && !isCurrent;
+                    if (isCurrent) {
+                        opt.textContent = `${label} (current)`;
+                        opt.style.fontWeight = 'bold';
+                        opt.style.color = '#22c55e';
+                    } else if (isPinned) {
+                        opt.textContent = `${label} (pinned)`;
+                        opt.style.color = '#f59e0b';
+                    } else {
+                        opt.textContent = label;
+                    }
+                    opt.title = c.message + '\n' + new Date(c.date * 1000).toLocaleString();
+                    select.appendChild(opt);
+                });
+                // Select current commit if editing, otherwise latest (first in list)
+                if (currentSha) {
+                    const match = Array.from(select.options).find(o => o.value === currentSha);
+                    select.value = match ? currentSha : (select.options[0]?.value || '');
+                } else {
+                    select.value = select.options[0]?.value || '';
+                }
+                info.classList.remove('hidden');
+                info.textContent = data.commits.length + ' commits available';
+                info.className = 'text-xs text-green-500 mt-1';
+            } catch (e) {
+                select.innerHTML = '<option value="">Error loading commits</option>';
+                select.value = '';
+                info.classList.remove('hidden');
+                info.textContent = 'Could not load commits: ' + e.message;
+                info.className = 'text-xs text-red-500 mt-1';
+                console.error('fetchCommits failed:', e);
+            }
+        }
+
+        function getSelectedRevision() {
+            const select = document.getElementById('commit_select');
+            const shaInput = document.getElementById('commit_sha');
+            if (shaInput.value.trim()) {
+                return shaInput.value.trim();
+            }
+            return select.value || 'latest';
+        }
+
+        document.getElementById('commit_select').addEventListener('change', function() {
+            const shaInput = document.getElementById('commit_sha');
+            if (this.value === 'latest') {
+                shaInput.value = '';
+            }
+        });
+
+        document.getElementById('commit_sha').addEventListener('input', function() {
+            const select = document.getElementById('commit_select');
+            if (this.value.trim()) {
+                select.value = 'custom';
+            }
+        });
+
         const defaultParams = {
             "no-mmap": true,
             "fit": "on",
@@ -172,9 +268,10 @@
         function updateMmprojJSON() {
             const val = mmprojSelect.value;
             const sym = symlinkInput.value || "model";
+            const quant = document.getElementById('quant').value;
             try {
                 const parsed = JSON.parse(paramInput.value);
-                if (val) { parsed["mmproj"] = `/models/served/${sym}-mmproj.gguf`; } 
+                if (val) { parsed["mmproj"] = `/models/served/${sym}-mmproj-${val.toUpperCase()}.gguf`; } 
                 else { delete parsed["mmproj"]; }
                 paramInput.value = JSON.stringify(parsed, null, 2);
                 paramInput.dispatchEvent(new Event('input')); 
@@ -250,7 +347,11 @@
         document.getElementById('hf_repo').addEventListener('input', function(e) {
             clearTimeout(repoDebounceTimer);
             const repo = e.target.value.trim();
-            if (repo.includes('/')) repoDebounceTimer = setTimeout(() => fetchQuants(repo, true), 800);
+            if (!repo.includes('/')) return;
+            repoDebounceTimer = setTimeout(() => {
+                fetchQuants(repo, true);
+                fetchCommits(repo);
+            }, 800);
         });
 
         async function fetchQuants(repo, autoFillSymlink = false) {
@@ -441,9 +542,10 @@
                             <h3 class="text-lg font-bold text-white flex flex-wrap items-center gap-2">
                                 <span class="truncate">${conf.name}</span>
                                 <span class="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded border border-blue-700 font-mono tracking-wider shadow-sm">${conf.quant}</span>
+                                ${conf.revision ? `<span class="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded border border-gray-600 font-mono tracking-wider shadow-sm" title="Commit: ${conf.revision}">${conf.revision.substring(0, 12)}...</span>` : ''}
                                 ${statusBadge}
                             </h3>
-                            <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${conf.repo}</p>
+                            <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${conf.repo}${conf.revision ? ' | Revision: ' + conf.revision.substring(0, 12) : ''}</p>
                             <div class="flex flex-wrap mt-2">${paramsHtml}</div>
                         </div>
                         ${buttons}
@@ -465,13 +567,11 @@
             });
         }
 
-        // SMART DOM REPLACEMENT: For Storage Manager
-        // SMART DOM REPLACEMENT: For Storage Manager
         function renderStorage() {
             const list = document.getElementById('storageList');
-            if (localModels.length === 0) { 
-                list.innerHTML = '<p class="text-gray-500 italic">No downloaded models found on disk.</p>'; 
-                return; 
+            if (localModels.length === 0) {
+                list.innerHTML = '<p class="text-gray-500 italic">No downloaded models found on disk.</p>';
+                return;
             }
             if (list.querySelector('p.italic')) { list.innerHTML = ''; }
 
@@ -483,38 +583,84 @@
             });
 
             localModels.forEach(repoData => {
-                let innerHTML = `<h3 class="text-md font-bold text-gray-300 mb-3 truncate border-b border-gray-700 pb-2">${repoData.repo}</h3><div class="space-y-3">`;
+                let innerHTML = `
+                    <div class="flex justify-between items-center mb-3 border-b border-gray-700 pb-2">
+                        <h3 class="text-md font-bold text-gray-300 truncate">${repoData.repo}</h3>
+                        <span class="text-xs font-mono text-gray-500 shrink-0 ml-2">${repoData.size_str}</span>
+                    </div>
+                    <div class="space-y-3">`;
 
-                const renderItem = (item, isMmproj) => {
-                    const blockId = `${repoData.repo}-${item.quant}-${isMmproj}`;
+                (repoData.revisions || []).forEach(rev => {
+                    const blockId = `${repoData.repo}-${rev.sha}`;
                     const isExpanded = expandedStorage.has(blockId);
-                    
+                    const refs = (rev.refs || []).map(r =>
+                        `<span class="text-xs bg-blue-900 text-blue-300 px-1.5 py-0.5 rounded border border-blue-700 font-mono">${r}</span>`
+                    ).join(' ');
+                    const usedBy = (rev.used_by || []).map(name =>
+                        `<span class="text-xs bg-green-900 text-green-300 px-1.5 py-0.5 rounded border border-green-700 font-mono">${name}</span>`
+                    ).join(' ');
+                    const pinned = (rev.used_by || []).length > 0;
+
+                    // Extract quants present in this revision
+                    const quants = new Set();
+                    const mmprojQuants = new Set();
+                    rev.files.forEach(f => {
+                        if (f.quant) {
+                            if (f.is_mmproj) {
+                                mmprojQuants.add(f.quant);
+                            } else {
+                                quants.add(f.quant);
+                            }
+                        }
+                    });
+                    const quantBadges = Array.from(quants).map(q =>
+                        `<span class="text-xs bg-green-900 text-green-300 px-2 py-0.5 rounded border border-green-700 font-mono">${q}</span>`
+                    ).join(' ');
+                    const mmprojBadges = Array.from(mmprojQuants).map(q =>
+                        `<span class="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded border border-purple-700 font-mono">${q} vision</span>`
+                    ).join(' ');
+
                     let filesHtml = '';
                     if (isExpanded) {
-                        filesHtml = `<div class="mt-2 pl-4 space-y-1 border-l-2 border-gray-700">`;
-                        item.files.forEach(f => {
-                            filesHtml += `<div class="flex justify-between text-xs text-gray-400 font-mono"><span>${f.name}</span><span>${f.size_str}</span></div>`;
+                        filesHtml = `<div class="mt-3 pl-4 space-y-1 border-l-2 border-gray-700">`;
+                        rev.files.forEach(f => {
+                            const tag = f.is_mmproj
+                                ? 'bg-purple-900 text-purple-300 border-purple-700'
+                                : 'bg-gray-700 text-gray-300 border-gray-600';
+                            filesHtml += `
+                                <div class="flex justify-between items-center text-xs font-mono gap-2">
+                                    <span class="flex items-center gap-2 min-w-0">
+                                        <span class="text-[10px] ${tag} px-1.5 py-0.5 rounded border shrink-0">${f.quant || '?'}${f.is_mmproj ? ' vision' : ''}</span>
+                                        <span class="text-gray-400 truncate">${f.name}</span>
+                                    </span>
+                                    <span class="text-gray-500 shrink-0">${f.size_str}</span>
+                                </div>`;
                         });
                         filesHtml += `</div>`;
                     }
 
-                    return `
+                    const deleteBtn = pinned
+                        ? `<button disabled title="Pinned by: ${(rev.used_by || []).join(', ')}" class="text-xs bg-gray-700 text-gray-500 py-1 px-2 rounded shrink-0 cursor-not-allowed">Pinned</button>`
+                        : `<button onclick="deleteRevision('${repoData.repo}', '${rev.sha}')" class="text-xs bg-red-600 hover:bg-red-500 text-white py-1 px-2 rounded shadow transition shrink-0">Delete</button>`;
+
+                    innerHTML += `
                         <div class="storage-file-row bg-gray-800 p-3 rounded border border-gray-700">
-                            <div class="flex justify-between items-center gap-2">
-                                <div class="flex items-center gap-2 sm:gap-3 cursor-pointer file-expand-icon text-gray-400 flex-1 min-w-0" onclick="toggleStorageDetails('${blockId}')">
-                                    <span class="text-xs ${isMmproj ? 'bg-purple-900 text-purple-300 border-purple-700' : 'bg-green-900 text-green-300 border-green-700'} px-2 py-1 rounded border font-mono tracking-wider shadow-sm truncate">${item.quant} ${isMmproj ? '(Vision)' : ''}</span>
-                                    <span class="text-sm font-mono whitespace-nowrap">${item.size_str}</span>
-                                    <span class="text-xs shrink-0">${isExpanded ? '▲' : '▼'}</span>
+                            <div class="flex justify-between items-start gap-2">
+                                <div class="flex flex-col gap-1.5 cursor-pointer file-expand-icon text-gray-400 flex-1 min-w-0" onclick="toggleStorageDetails('${blockId}')">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded border border-gray-600 font-mono" title="${rev.sha}">${rev.short_sha}</span>
+                                        ${refs}
+                                        <span class="text-sm font-mono text-gray-300">${rev.size_str}</span>
+                                        <span class="text-xs">${isExpanded ? '▲' : '▼'}</span>
+                                    </div>
+                                    <div class="flex items-center gap-1 flex-wrap">${quantBadges}${mmprojBadges}</div>
+                                    ${usedBy ? `<div class="flex items-center gap-1 flex-wrap"><span class="text-[10px] uppercase tracking-wider text-gray-500">used by:</span> ${usedBy}</div>` : ''}
                                 </div>
-                                <button onclick="deletePhysicalModel('${repoData.repo}', '${item.quant}', ${isMmproj})" class="text-xs bg-red-600 hover:bg-red-500 text-white py-1 px-2 sm:py-1.5 sm:px-3 rounded shadow transition shrink-0">Delete</button>
+                                ${deleteBtn}
                             </div>
                             ${filesHtml}
-                        </div>
-                    `;
-                };
-
-                repoData.quants.forEach(q => innerHTML += renderItem(q, false));
-                repoData.mmprojs.forEach(m => innerHTML += renderItem(m, true));
+                        </div>`;
+                });
                 innerHTML += `</div>`;
 
                 let repoGroup = list.querySelector(`.storage-repo-card[data-repo="${repoData.repo}"]`);
@@ -531,17 +677,43 @@
             });
         }
 
-        async function deletePhysicalModel(repo, quant, isMmproj) {
-            if(confirm(`WARNING: This permanently deletes the physical ${quant} files for ${repo} from your hard drive.\n\nAny Active Configurations using this quant will be flagged as Missing.\n\nProceed with deletion?`)) {
-                try {
-                    const res = await fetch(`/api/models/delete`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ repo, quant, is_mmproj: isMmproj })
-                    });
-                    if(res.ok) { fetchLocalModels(); } 
-                    else { alert("Failed to delete model files."); }
-                } catch(e) { console.error(e); }
+        async function deleteRevision(repo, sha) {
+            if (!confirm(`Delete cached revision ${sha.substring(0, 12)} for ${repo}?\n\nBlobs unique to this revision will be removed. Shared blobs remain.`)) return;
+            try {
+                const res = await fetch('/api/revisions/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ repo, revision: sha })
+                });
+                if (res.ok) { fetchLocalModels(); return; }
+                const data = await res.json();
+                if (res.status === 409 && data.detail && data.detail.used_by) {
+                    const names = data.detail.used_by.join(', ');
+                    alert(`Cannot delete revision: it is pinned by the following configs.\n\n  ${names}\n\nDelete those configs first, then retry.`);
+                } else {
+                    alert('Failed to delete revision: ' + (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)));
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Network error while deleting revision.');
+            }
+        }
+
+        function populateRevision(rev) {
+            const commitSelect = document.getElementById('commit_select');
+            const commitSha = document.getElementById('commit_sha');
+            if (!rev) {
+                commitSelect.value = 'latest';
+                commitSha.value = '';
+                return;
+            }
+            const match = Array.from(commitSelect.options).find(o => o.value === rev);
+            if (match) {
+                commitSelect.value = rev;
+                commitSha.value = '';
+            } else {
+                commitSelect.value = 'latest';
+                commitSha.value = rev;
             }
         }
 
@@ -553,13 +725,20 @@
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-green-400";
             document.getElementById('hf_repo').value = conf.repo;
             await fetchQuants(conf.repo, false);
+            await fetchCommits(conf.repo, conf.revision);
+            populateRevision(conf.revision);
             document.getElementById('quant').value = conf.quant;
             document.getElementById('mmproj').value = conf.mmproj || "";
             document.getElementById('symlink_name').value = conf.name + "-COPY";
             document.getElementById('submitBtn').textContent = "Provision Duplicate";
             document.getElementById('submitBtn').className = "flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Cancel";
-            document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
+            // Fix mmproj symlink path to include quant
+            let params = JSON.parse(JSON.stringify(conf.params));
+            if (conf.mmproj && params.mmproj) {
+                params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
+            }
+            document.getElementById('parameters').value = JSON.stringify(params, null, 2);
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -570,15 +749,22 @@
             document.getElementById('formTitle').className = "text-2xl font-bold mb-4 text-yellow-400";
             document.getElementById('hf_repo').value = conf.repo;
             await fetchQuants(conf.repo, false);
+            await fetchCommits(conf.repo, conf.revision);
+            populateRevision(conf.revision);
             document.getElementById('quant').value = conf.quant;
-            document.getElementById('mmproj').value = conf.mmproj || ""; 
+            document.getElementById('mmproj').value = conf.mmproj || "";
             document.getElementById('symlink_name').value = conf.name;
             document.getElementById('original_name').value = conf.name;
             document.getElementById('submitBtn').textContent = "Update / Re-Download";
             document.getElementById('submitBtn').className = "flex-1 bg-yellow-600 hover:bg-yellow-500 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Cancel Edit";
             document.getElementById('clearBtn').className = "bg-red-900 hover:bg-red-800 text-white py-2 px-4 rounded transition shadow";
-            document.getElementById('parameters').value = JSON.stringify(conf.params, null, 2);
+            // Fix mmproj symlink path to include quant
+            let params = JSON.parse(JSON.stringify(conf.params));
+            if (conf.mmproj && params.mmproj) {
+                params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
+            }
+            document.getElementById('parameters').value = JSON.stringify(params, null, 2);
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -590,6 +776,9 @@
             document.getElementById('quant').innerHTML = '<option value="">Paste repo above to load quants...</option>';
             document.getElementById('quant').disabled = true;
             document.getElementById('mmproj_container').classList.add('hidden');
+            document.getElementById('commit_select').innerHTML = '<option value="">Select a commit...</option>';
+            document.getElementById('commit_sha').value = '';
+            document.getElementById('commit_info').classList.add('hidden');
             document.getElementById('submitBtn').textContent = "Provision Model";
             document.getElementById('submitBtn').className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition shadow";
             document.getElementById('clearBtn').textContent = "Clear";
@@ -623,7 +812,8 @@
                 mmproj: document.getElementById('mmproj').value,
                 symlink_name: document.getElementById('symlink_name').value,
                 original_name: document.getElementById('original_name').value,
-                parameters: document.getElementById('parameters').value
+                parameters: document.getElementById('parameters').value,
+                revision: getSelectedRevision()
             };
 
             try {
