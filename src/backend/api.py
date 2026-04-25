@@ -94,21 +94,6 @@ async def api_get_branches(repo: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _get_branch_heads(repo_id):
-    """Get {branch: sha} mapping for all branches of a repo from HF. Returns empty dict on failure."""
-    try:
-        branches = get_branches(repo_id)
-    except Exception:
-        return {}
-    heads = {}
-    for branch in branches:
-        try:
-            heads[branch] = resolve_sha(repo_id, branch)
-        except Exception:
-            continue
-    return heads
-
-
 # --- API: Local Models ---
 async def get_local_models():
     cache = scan_cache()
@@ -125,8 +110,6 @@ async def get_local_models():
 
     models = []
     for repo in sorted(cache.repos, key=lambda r: r.repo_id):
-        branch_heads = _get_branch_heads(repo.repo_id)
-        log.info(f"get_local_models: {repo.repo_id} branch_heads={branch_heads}")
         revisions = []
         for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
             files = []
@@ -142,17 +125,12 @@ async def get_local_models():
                 })
             if not files:
                 continue
-            refs = list(rev.refs)
-            for branch, sha in branch_heads.items():
-                if rev.commit_hash == sha and branch not in refs:
-                    refs.append(branch)
-            log.debug(f"get_local_models: {repo.repo_id} {rev.commit_hash[:12]} refs={refs}")
             revisions.append({
                 "sha": rev.commit_hash,
                 "short_sha": rev.commit_hash[:12],
                 "size_str": format_bytes(rev.size_on_disk),
                 "last_modified": rev.last_modified,
-                "refs": sorted(refs),
+                "refs": sorted(rev.refs),
                 "files": files,
                 "used_by": used_by.get((repo.repo_id, rev.commit_hash), []),
             })

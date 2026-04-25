@@ -199,13 +199,9 @@ const Render = (() => {
     function buildStorageRevisionCard(repoData, rev) {
         const blockId = `${repoData.repo}-${rev.sha}`;
         const isExpanded = AppState.expandedStorage.has(blockId);
-        const refs = (rev.refs || []).map(r => {
-            const isBranch = !r.startsWith("tags/");
-            const badgeClass = isBranch
-                ? "bg-blue-900 text-blue-300 border-blue-700"
-                : "bg-purple-900 text-purple-300 border-purple-700";
-            return `<span class="text-xs ${badgeClass} px-1.5 py-0.5 rounded border font-mono">${Utils.escapeHtml(r)}</span>`;
-        }).join(" ");
+        const refs = (rev.refs || []).map(r =>
+            `<span class="text-xs bg-blue-900 text-blue-300 px-1.5 py-0.5 rounded border border-blue-700 font-mono">${Utils.escapeHtml(r)}</span>`
+        ).join(" ");
 
         const usedBy = (rev.used_by || []).map(name =>
             `<span class="text-xs bg-green-900 text-green-300 px-1.5 py-0.5 rounded border border-green-700 font-mono">${Utils.escapeHtml(name)}</span>`
