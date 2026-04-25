@@ -15,8 +15,14 @@ const Api = (() => {
         return res.json();
     }
 
-    async function fetchCommits(repo) {
-        const res = await fetch(`/api/commits?repo=${encodeURIComponent(repo)}`);
+    async function fetchBranches(repo) {
+        const res = await fetch(`/api/branches?repo=${encodeURIComponent(repo)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+    }
+
+    async function fetchCommits(repo, revision = "main") {
+        const res = await fetch(`/api/commits?repo=${encodeURIComponent(repo)}&revision=${encodeURIComponent(revision)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
     }
@@ -51,6 +57,7 @@ const Api = (() => {
 
     return {
         rpcMode,
+        fetchBranches,
         fetchQuants,
         fetchCommits,
         fetchLocalModels,

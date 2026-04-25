@@ -8,6 +8,7 @@ const AppState = (() => {
     let lastConfigStr = "";
     let lastStorageStr = "";
     let lastCommitsStr = "";
+    let selectedBranch = "main";
     let isRpcMode = false;
 
     return {
@@ -25,6 +26,8 @@ const AppState = (() => {
         set lastStorageStr(val) { lastStorageStr = val; },
         get lastCommitsStr() { return lastCommitsStr; },
         set lastCommitsStr(val) { lastCommitsStr = val; },
+        get selectedBranch() { return selectedBranch; },
+        set selectedBranch(val) { selectedBranch = val; },
         get isRpcMode() { return isRpcMode; },
         set isRpcMode(val) { isRpcMode = val; },
         getDefaultParams() {

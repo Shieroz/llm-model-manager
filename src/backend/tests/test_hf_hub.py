@@ -71,7 +71,7 @@ class TestGetCommits:
 
         result = get_commits("test/repo", limit=10)
         assert len(result) == 10
-        mock_api.list_repo_commits.assert_called_once_with("test/repo", repo_type="model")
+        mock_api.list_repo_commits.assert_called_once_with("test/repo", repo_type="model", revision="main")
 
     @patch("backend.hf_hub.HfApi")
     def test_sorts_newest_first(self, mock_api_class):

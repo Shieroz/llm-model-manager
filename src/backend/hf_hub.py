@@ -15,11 +15,18 @@ def resolve_sha(repo: str, ref: str = "main") -> str:
     return info.sha
 
 
-def get_commits(repo: str, limit: int = 50) -> list:
-    log.info(f"get_commits: fetching for {repo}, limit={limit}")
+def get_branches(repo: str) -> list:
+    """List available branches for a repo."""
+    api = HfApi(token=None)
+    refs = api.list_repo_refs(repo, repo_type="model")
+    return [r.name for r in refs.branches]
+
+
+def get_commits(repo: str, limit: int = 50, revision: str = "main") -> list:
+    log.info(f"get_commits: fetching for {repo}, limit={limit}, revision={revision}")
     api = HfApi(token=None)
     log.info(f"get_commits: HfApi created, calling list_repo_commits")
-    commits = list(api.list_repo_commits(repo, repo_type="model"))[:limit]
+    commits = list(api.list_repo_commits(repo, repo_type="model", revision=revision))[:limit]
     log.info(f"get_commits: got {len(commits)} commits")
     result = []
     for c in commits:

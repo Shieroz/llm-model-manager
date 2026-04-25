@@ -79,6 +79,9 @@ const Form = (() => {
         if (shaInput.value.trim()) {
             return shaInput.value.trim();
         }
+        if (select.value === "latest") {
+            return AppState.selectedBranch || "main";
+        }
         return select.value || "latest";
     }
 
@@ -129,14 +132,27 @@ const Form = (() => {
         title.textContent = "Deploy New Config";
         title.className = "text-2xl font-bold mb-4 text-blue-400";
 
+        Utils.getEl("hf_repo").value = "";
         Utils.getEl("setupForm").reset();
         Utils.getEl("original_name").value = "";
         Utils.getEl("quant").innerHTML = '<option value="">Paste repo above to load quants...</option>';
         Utils.getEl("quant").disabled = true;
         Utils.getEl("mmproj_container").classList.add("hidden");
-        Utils.getEl("commit_select").innerHTML = '<option value="">Select a commit...</option>';
+        Utils.getEl("commit_select").innerHTML = '<option value="">Enter a repo first</option>';
+        Utils.getEl("commit_select").disabled = true;
         Utils.getEl("commit_sha").value = "";
+        Utils.getEl("commit_sha").disabled = true;
+        Utils.getEl("commit_sha").placeholder = "Enter a repo first";
         Utils.getEl("commit_info").classList.add("hidden");
+        Utils.getEl("branch_select").innerHTML = '<option value="">Enter a repo first</option>';
+        Utils.getEl("branch_select").disabled = true;
+        AppState.selectedBranch = "main";
+        AppState.lastCommitsStr = "";
+        Utils.getEl("quant").innerHTML = '<option value="">Enter a repo first</option>';
+        Utils.getEl("quant").disabled = true;
+        Utils.getEl("symlink_name").disabled = true;
+        Utils.getEl("mmproj").disabled = true;
+        AppState.selectedBranch = "main";
 
         const btn = Utils.getEl("submitBtn");
         btn.textContent = "Provision Model";

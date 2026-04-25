@@ -19,6 +19,7 @@ from backend.api import (
     setup_model,
     toggle_rpc,
     api_get_commits,
+    api_get_branches,
     websocket_endpoint,
 )
 from backend.models import ModelSetup, RevisionDeleteReq, RpcModeReq
@@ -115,8 +116,13 @@ async def api_quants(repo: str):
 
 
 @app.get("/api/commits")
-async def api_commits(repo: str):
-    return await api_get_commits(repo)
+async def api_commits(repo: str, revision: str = "main"):
+    return await api_get_commits(repo, revision)
+
+
+@app.get("/api/branches")
+async def api_branches(repo: str):
+    return await api_get_branches(repo)
 
 
 @app.get("/api/models")

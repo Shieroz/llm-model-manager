@@ -8,7 +8,7 @@ from fastapi import BackgroundTasks, HTTPException, WebSocket, WebSocketDisconne
 
 from backend.cache import scan_cache, prune_unreferenced_revisions
 from backend.config import QUANT_REGEX
-from backend.hf_hub import get_commits, pre_flight_size, resolve_sha
+from backend.hf_hub import get_branches, get_commits, pre_flight_size, resolve_sha
 from backend.models import ModelSetup, RevisionDeleteReq, RpcModeReq
 from backend.state import format_bytes, iter_configs, load_state, save_state
 from backend.sync import sync_system
@@ -55,15 +55,16 @@ async def get_quants(repo: str):
         mmproj_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in mmproj_dict.items()]
         mmproj_list.sort(key=lambda x: x["raw"], reverse=True)
 
-        return {"quants": quants_list, "mmprojs": mmproj_list}
+        repo_name = repo.rsplit("/", 1)[-1] if "/" in repo else repo
+        return {"quants": quants_list, "mmprojs": mmproj_list, "repoName": repo_name}
     except Exception as e:
         log.error(f"Failed to fetch quants for {repo}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- API: Commits ---
-async def api_get_commits(repo: str):
-    log.info(f"Fetching commits for repo: {repo}")
+async def api_get_commits(repo: str, revision: str = "main"):
+    log.info(f"Fetching commits for repo: {repo}, revision: {revision}")
     try:
         state = load_state()
         pinned_shas = {
@@ -71,13 +72,25 @@ async def api_get_commits(repo: str):
             for _, d in iter_configs(state)
             if d.get("repo") == repo and d.get("revision")
         }
-        commits = get_commits(repo)
+        commits = get_commits(repo, revision=revision)
         for c in commits:
             c["pinned"] = c["sha"] in pinned_shas
         log.info(f"Got {len(commits)} commits for {repo}")
         return {"commits": commits}
     except Exception as e:
         log.error(f"Failed to fetch commits for {repo}: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- API: Branches ---
+async def api_get_branches(repo: str):
+    log.info(f"Fetching branches for repo: {repo}")
+    try:
+        branches = get_branches(repo)
+        log.info(f"Got {len(branches)} branches for {repo}")
+        return {"branches": branches}
+    except Exception as e:
+        log.error(f"Failed to fetch branches for {repo}: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
 
 

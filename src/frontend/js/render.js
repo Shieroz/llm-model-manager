@@ -70,7 +70,7 @@ const Render = (() => {
                         ${revisionBadge}
                         ${statusBadge}
                     </h3>
-                    <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${Utils.escapeHtml(repo)}${revision ? " | Revision: " + Utils.shortSha(revision) : ""}</p>
+                    <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${Utils.escapeHtml(repo)}</p>
                     <div class="flex flex-wrap mt-2">${paramsHtml}</div>
                 </div>
                 ${buttons}

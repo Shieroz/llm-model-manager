@@ -64,12 +64,23 @@ const App = (() => {
 
         Utils.getEl("hf_repo").value = conf.repo;
         await Api.fetchQuants(conf.repo).then(data => populateQuants(data, false));
+        Utils.getEl("branch_select").disabled = false;
+        Utils.getEl("commit_select").disabled = false;
+        Utils.getEl("commit_sha").disabled = false;
+        Utils.getEl("commit_sha").placeholder = "or enter SHA...";
+        Utils.getEl("symlink_name").disabled = false;
+        await fetchBranches(conf.repo);
+        populateBranch(conf.revision);
         await fetchCommits(conf.repo, conf.revision);
         populateRevision(conf.revision);
 
         Utils.getEl("quant").value = conf.quant;
         Utils.getEl("mmproj").value = conf.mmproj || "";
         Utils.getEl("symlink_name").value = conf.name;
+        if (conf.mmproj) {
+            Utils.getEl("mmproj").disabled = false;
+            Utils.getEl("mmproj_container").classList.remove("hidden");
+        }
         Utils.getEl("original_name").value = conf.name;
 
         const btn = Utils.getEl("submitBtn");
@@ -155,11 +166,9 @@ const App = (() => {
     async function fetchCommits(repo, currentSha = null) {
         const select = Utils.getEl("commit_select");
         const info = Utils.getEl("commit_info");
+        const branch = AppState.selectedBranch || "main";
         try {
-            const data = await Api.fetchCommits(repo);
-            const newCommitsStr = JSON.stringify(data.commits || []);
-            if (newCommitsStr === AppState.lastCommitsStr) return;
-            AppState.lastCommitsStr = newCommitsStr;
+            const data = await Api.fetchCommits(repo, branch);
 
             select.innerHTML = "";
             if (!data.commits || data.commits.length === 0) {
@@ -199,7 +208,7 @@ const App = (() => {
                 select.value = select.options[0]?.value || "";
             }
             info.classList.remove("hidden");
-            info.textContent = data.commits.length + " commits available";
+            info.textContent = data.commits.length + " commits on " + branch;
             info.className = "text-xs text-green-500 mt-1";
         } catch (e) {
             select.innerHTML = '<option value="">Error loading commits</option>';
@@ -223,9 +232,55 @@ const App = (() => {
         if (match) {
             commitSelect.value = rev;
             commitSha.value = "";
-        } else {
+        } else if (commitSelect.value === "latest" || !commitSelect.value) {
             commitSelect.value = "latest";
             commitSha.value = rev;
+        }
+    }
+
+    async function fetchBranches(repo) {
+        const select = Utils.getEl("branch_select");
+        try {
+            const data = await Api.fetchBranches(repo);
+            const branches = data.branches || [];
+            const currentBranch = select.value;
+            select.innerHTML = "";
+            if (branches.length === 0) {
+                const opt = document.createElement("option");
+                opt.value = "main";
+                opt.textContent = "main (default)";
+                select.appendChild(opt);
+                AppState.selectedBranch = "main";
+            } else {
+                branches.forEach(b => {
+                    const opt = document.createElement("option");
+                    opt.value = b;
+                    opt.textContent = b === "main" ? `${b} (default)` : b;
+                    select.appendChild(opt);
+                });
+                if (branches.includes(currentBranch)) {
+                    select.value = currentBranch;
+                    AppState.selectedBranch = currentBranch;
+                } else {
+                    select.value = branches[0];
+                    AppState.selectedBranch = branches[0];
+                }
+            }
+        } catch (e) {
+            select.innerHTML = '<option value="">Error loading branches</option>';
+            select.disabled = true;
+            console.error("fetchBranches failed:", e);
+        }
+    }
+
+    function populateBranch(rev) {
+        const select = Utils.getEl("branch_select");
+        if (!rev || select.options.length === 0) return;
+        const match = Array.from(select.options).find(o => o.value === rev);
+        if (!match) {
+            const defaultBranch = select.options[0]?.value || "main";
+            select.value = defaultBranch;
+            AppState.selectedBranch = defaultBranch;
         }
     }
 
@@ -260,6 +315,7 @@ const App = (() => {
         mmprojSelect.innerHTML = '<option value="">None</option>';
         if (data.mmprojs && data.mmprojs.length > 0) {
             mmprojContainer.classList.remove("hidden");
+            mmprojSelect.disabled = false;
             data.mmprojs.forEach(q => {
                 const opt = document.createElement("option");
                 opt.value = q.name;
@@ -268,6 +324,7 @@ const App = (() => {
             });
         } else {
             mmprojContainer.classList.add("hidden");
+            mmprojSelect.disabled = true;
         }
     }
 
@@ -275,10 +332,48 @@ const App = (() => {
         const repoInput = Utils.getEl("hf_repo");
         repoInput.addEventListener("input", Utils.debounce(async (e) => {
             const repo = e.target.value.trim();
-            if (!repo.includes("/")) return;
-            await Api.fetchQuants(repo).then(data => populateQuants(data, true));
-            await fetchCommits(repo);
+            const inputs = ["branch_select", "commit_select", "commit_sha", "quant", "symlink_name", "mmproj"];
+            inputs.forEach(id => Utils.getEl(id).disabled = true);
+
+            if (!repo.includes("/")) {
+                Utils.getEl("branch_select").innerHTML = '<option value="">Enter a repo first</option>';
+                Utils.getEl("commit_select").innerHTML = '<option value="">Enter a repo first</option>';
+                Utils.getEl("commit_sha").value = "";
+                Utils.getEl("quant").innerHTML = '<option value="">Enter a repo first</option>';
+                Utils.getEl("symlink_name").value = "";
+                return;
+            }
+
+            try {
+                const data = await Api.fetchQuants(repo);
+                populateQuants(data, true);
+                Utils.getEl("branch_select").disabled = false;
+                Utils.getEl("commit_select").disabled = false;
+                Utils.getEl("commit_sha").disabled = false;
+                Utils.getEl("commit_sha").placeholder = "or enter SHA...";
+                Utils.getEl("symlink_name").disabled = false;
+                await fetchBranches(repo);
+                await fetchCommits(repo);
+            } catch (e) {
+                Utils.getEl("branch_select").innerHTML = '<option value="">Error loading branches</option>';
+                Utils.getEl("commit_select").innerHTML = '<option value="">Error loading commits</option>';
+                Utils.getEl("commit_sha").value = "";
+                Utils.getEl("commit_sha").disabled = true;
+                Utils.getEl("commit_sha").placeholder = "Enter a repo first";
+                Utils.getEl("quant").innerHTML = '<option value="">Repo not found</option>';
+                Utils.getEl("quant").disabled = true;
+                Utils.getEl("symlink_name").value = "";
+                Utils.getEl("symlink_name").disabled = true;
+            }
         }, 800));
+
+        const branchSelect = Utils.getEl("branch_select");
+        branchSelect.addEventListener("change", async () => {
+            const repo = Utils.getEl("hf_repo").value.trim();
+            if (!repo.includes("/")) return;
+            AppState.selectedBranch = branchSelect.value;
+            await fetchCommits(repo);
+        });
     }
 
     return { init: () => { exposeGlobals(); Form.init(); initRepoDebounce(); } };
