@@ -70,3 +70,29 @@ class TestSingleton:
 
         assert isinstance(m1, CM)
         assert len(m1.active_connections) == 0
+
+
+class TestWebsocketEndpoint:
+    @pytest.mark.asyncio
+    async def test_endpoint_disconnects_manager_on_websocket_disconnect(self):
+        from backend.api import websocket_endpoint
+        from fastapi import WebSocketDisconnect as FSDisconnect
+
+        mock_ws = MagicMock()
+        mock_ws.receive_text = AsyncMock(side_effect=FSDisconnect())
+        mock_manager = MagicMock()
+        mock_manager.connect = AsyncMock()
+        mock_manager.disconnect = MagicMock()
+
+        with patch("backend.api.manager", mock_manager):
+            try:
+                await websocket_endpoint(mock_ws)
+            except FSDisconnect:
+                pass
+
+        mock_manager.disconnect.assert_called_once_with(mock_ws)
+
+    @pytest.mark.asyncio
+    async def test_websocket_disconnect_is_importable(self):
+        from fastapi import WebSocketDisconnect
+        assert WebSocketDisconnect is not None

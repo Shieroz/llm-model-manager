@@ -4,7 +4,7 @@ import os
 import re
 import shutil
 
-from fastapi import BackgroundTasks, HTTPException, WebSocket
+from fastapi import BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
 
 from backend.cache import scan_cache, prune_unreferenced_revisions
 from backend.config import QUANT_REGEX
