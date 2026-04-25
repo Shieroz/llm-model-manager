@@ -2,7 +2,7 @@
 
 ## Architecture
 - **Modular app**: `src/backend/` (FastAPI) + `src/frontend/` (vanilla HTML/CSS/JS). No lint/typecheck config.
-- **Test suite**: 127 tests across 9 test files — all passing. Run with `./up.sh test` (no Docker).
+- **Test suite**: 127 tests across 9 test files — all passing. Run with `./dev.sh test` (no Docker).
 - **Two-container deployment**: `llm-model-manager` (API/UI) + `llama-swap` (llama-server proxy).
 - **State**: `/models/served/state.json` + `config.yaml`. **Cache**: `/models/.cache` (HF cache).
 - **Frontend CSS**: compiled from `input.css` → `static/output.css` via Tailwind standalone CLI (no Node.js). Rebuild: `./tailwindcss-linux-x64 -i ./input.css -o ./static/output.css --minify`.
@@ -33,11 +33,12 @@ LLAMA_BACKEND=sycl ./up.sh
 LLAMA_BACKEND=openvino ./up.sh
 ```
 
-- `up.sh` uses `LLAMA_BACKEND` env var to pick the compose override: `cuda`, `vulkan`, `sycl`, or `openvino`.
+- `up.sh` uses `LLAMA_BACKEND` env var to pick the compose override: `cuda`, `vulkan`, `sycl`.
 - Default compose file: `docker-compose.yml` + chosen override. llama-swap Dockerfile is set via `LLAMA_DOCKERFILE` env var (default: `Dockerfile.llama.cuda`).
 - **Do not** run `docker compose up` directly — always use `up.sh` so the backend flag is applied consistently.
 - **`up.sh` bugs**: SYCL override path is `compose.sycl.yml` (missing `docker-` prefix). `openvino` backend falls through to the error case — no case arm for it despite `docker-compose.openvino.yml` existing.
-- **Tests**: `./up.sh test` runs pytest locally (no Docker). 127 tests: 94 backend (config, models, state, cache, hf_hub, sync, websocket, api) + 33 frontend E2E (HTML structure, form elements, API routes, styling, layout, WebSocket).
+- **Tests**: `./dev.sh test` runs pytest locally (no Docker). 127 tests: 94 backend (config, models, state, cache, hf_hub, sync, websocket, api) + 33 frontend E2E (HTML structure, form elements, API routes, styling, layout, WebSocket).
+- **Dev mode**: `./dev.sh dev` starts the container with selective source mounts via `docker-compose.dev.yml` (preserves compiled CSS, adds `--reload`). Backend path fixed: `COPY src/backend/ ./backend` (was overwriting `/app/`).
 
 ## Key paths & env
 | Variable | Purpose |

@@ -72,12 +72,21 @@ curl -X POST http://localhost:8000/api/rpc_mode -H 'Content-Type: application/js
 
 Modular Python backend (`src/backend/`) with vanilla HTML/CSS/JS frontend (`src/frontend/`).
 
+### Development Server
+
+```bash
+./dev.sh dev     # Start with source mounts + auto-reload
+./dev.sh dev-down # Stop dev server
+```
+
+Source files are selectively mounted via `docker-compose.dev.yml` (preserves compiled CSS).
+
 ### Tests
 
 127 tests across 9 test files. Run locally without Docker:
 
 ```bash
-./up.sh test
+./dev.sh test
 ```
 
 Covers: backend (config, models, state, cache, hf_hub, sync, websocket, api) + frontend (HTML structure, form elements, API routes, styling, layout, WebSocket).
