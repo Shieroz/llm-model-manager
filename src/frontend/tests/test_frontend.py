@@ -14,8 +14,9 @@ class TestHtmlStructure:
 
     def test_all_script_tags_present(self, html):
         """Verify all modular JS files are loaded."""
+        from urllib.parse import urlparse
         scripts = html.find_all("script", src=True)
-        srcs = [s["src"] for s in scripts if s["src"].startswith("/js/")]
+        srcs = [urlparse(s["src"]).path for s in scripts if urlparse(s["src"]).path.startswith("/js/")]
         expected = [
             "/js/state.js",
             "/js/utils.js",

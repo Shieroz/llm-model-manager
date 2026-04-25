@@ -131,6 +131,100 @@ class TestGetLocalModels:
         assert result["models"][0]["revisions"][0]["sha"] == "abc123def456"
 
 
+class TestGetBranchHeads:
+    @patch("backend.api.get_branches")
+    @patch("backend.api.resolve_sha")
+    def test_returns_branch_to_sha_mapping(self, mock_resolve, mock_get_branches):
+        from backend.api import _get_branch_heads
+        mock_get_branches.return_value = ["main", "v1"]
+        mock_resolve.side_effect = ["sha1", "sha2"]
+        result = _get_branch_heads("test/repo")
+        assert result == {"main": "sha1", "v1": "sha2"}
+
+    @patch("backend.api.get_branches", side_effect=Exception("network error"))
+    def test_returns_empty_on_failure(self, mock_get_branches):
+        from backend.api import _get_branch_heads
+        result = _get_branch_heads("test/repo")
+        assert result == {}
+
+    @patch("backend.api.get_branches")
+    @patch("backend.api.resolve_sha")
+    def test_skips_failed_branches(self, mock_resolve, mock_get_branches):
+        from backend.api import _get_branch_heads
+        mock_get_branches.return_value = ["main", "v1", "v2"]
+        mock_resolve.side_effect = [Exception("fail"), "sha2", "sha3"]
+        result = _get_branch_heads("test/repo")
+        assert result == {"v1": "sha2", "v2": "sha3"}
+
+
+class TestLocalModelsBranchTags:
+    @patch("backend.api.scan_cache")
+    @patch("backend.api._get_branch_heads")
+    @pytest.mark.asyncio
+    async def test_revisions_tagged_with_branch_name(self, mock_branches, mock_scan):
+        from backend.api import get_local_models
+        mock_branches.return_value = {"main": "abc123def456", "v1": "def789abc012"}
+        mock_cache = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.repo_id = "test/repo"
+        mock_repo.size_on_disk = 5000000000
+        mock_rev1 = MagicMock()
+        mock_rev1.commit_hash = "abc123def456"
+        mock_rev1.size_on_disk = 5000000000
+        mock_rev1.last_modified = 2000000
+        mock_rev1.refs = []
+        mock_file1 = MagicMock()
+        mock_file1.file_name = "model-Q4_K_M.gguf"
+        mock_file1.size_on_disk = 5000000000
+        mock_rev1.files = [mock_file1]
+        mock_rev2 = MagicMock()
+        mock_rev2.commit_hash = "def789abc012"
+        mock_rev2.size_on_disk = 3000000000
+        mock_rev2.last_modified = 1000000
+        mock_rev2.refs = []
+        mock_file2 = MagicMock()
+        mock_file2.file_name = "model-Q5_K_M.gguf"
+        mock_file2.size_on_disk = 3000000000
+        mock_rev2.files = [mock_file2]
+        mock_repo.revisions = [mock_rev1, mock_rev2]
+        mock_cache.repos = [mock_repo]
+        mock_scan.return_value = mock_cache
+        result = await get_local_models()
+        main_rev = result["models"][0]["revisions"][0]
+        v1_rev = result["models"][0]["revisions"][1]
+        assert "main" in main_rev["refs"]
+        assert "v1" in v1_rev["refs"]
+        assert "main" not in v1_rev["refs"]
+        assert "v1" not in main_rev["refs"]
+
+    @patch("backend.api.scan_cache")
+    @patch("backend.api._get_branch_heads")
+    @pytest.mark.asyncio
+    async def test_existing_refs_preserved(self, mock_branches, mock_scan):
+        from backend.api import get_local_models
+        mock_branches.return_value = {"main": "abc123def456"}
+        mock_cache = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.repo_id = "test/repo"
+        mock_repo.size_on_disk = 5000000000
+        mock_rev = MagicMock()
+        mock_rev.commit_hash = "abc123def456"
+        mock_rev.size_on_disk = 5000000000
+        mock_rev.last_modified = 1000000
+        mock_rev.refs = ["tags/v1.0"]
+        mock_file = MagicMock()
+        mock_file.file_name = "model-Q4_K_M.gguf"
+        mock_file.size_on_disk = 5000000000
+        mock_rev.files = [mock_file]
+        mock_repo.revisions = [mock_rev]
+        mock_cache.repos = [mock_repo]
+        mock_scan.return_value = mock_cache
+        result = await get_local_models()
+        refs = result["models"][0]["revisions"][0]["refs"]
+        assert "main" in refs
+        assert "tags/v1.0" in refs
+
+
 class TestToggleRpc:
     @pytest.mark.asyncio
     async def test_enables_rpc_mode(self, empty_state):
