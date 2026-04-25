@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Copy the Python backend and HTML
-COPY src/backend/ .
+COPY src/backend/ ./backend
 COPY src/frontend/ ./frontend
 
 # COPY THE COMPILED CSS FROM STAGE 1 (Leaves Node.js behind!)
