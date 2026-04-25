@@ -62,4 +62,29 @@ State is persisted in `/models/served/state.json`. Model cache lives at `/models
 
 ## Development
 
-Single-file app (`app.py`). No tests, no linting. Verify changes by reading the code.
+Modular Python backend (`src/backend/`) with vanilla HTML/CSS frontend (`src/frontend/`).
+
+### Tests
+
+94 tests across 8 test files. Run locally without Docker:
+
+```bash
+./up.sh test
+```
+
+Covers: config, models, state, cache, hf_hub, sync, websocket, and api handlers.
+
+### Source Structure
+
+| File | Purpose |
+|---|---|
+| `src/backend/app.py` | FastAPI setup, lifespan, route definitions |
+| `src/backend/api.py` | All route handlers |
+| `src/backend/config.py` | Constants, paths, regex patterns |
+| `src/backend/models.py` | Pydantic request/response models |
+| `src/backend/state.py` | State file read/write |
+| `src/backend/cache.py` | HF cache scanning and pruning |
+| `src/backend/hf_hub.py` | HuggingFace API calls |
+| `src/backend/sync.py` | llama-swap config sync |
+| `src/backend/download.py` | PTY-based model downloads |
+| `src/backend/websocket.py` | WebSocket connection manager |
