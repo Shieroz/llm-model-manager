@@ -25,10 +25,20 @@ case "${1:-help}" in
     PIP="$VENV/bin/pip"
     if ! "$PIP" show pytest >/dev/null 2>&1; then
       echo "Installing test dependencies..."
-      "$PIP" install -r "$SRC_DIR/backend/requirements.txt" pytest pytest-asyncio
+      "$PIP" install --upgrade pip
+      "$PIP" install -r "$SRC_DIR/backend/requirements.txt"
+      "$PIP" install pytest pytest-asyncio beautifulsoup4 httpx
+    else
+      # Ensure all test dependencies are installed even if pytest exists
+      "$PIP" install pytest pytest-asyncio beautifulsoup4 httpx >/dev/null 2>&1 || true
     fi
-    echo "Running tests..."
+    echo "Running backend tests..."
     "$VENV/bin/python" -m pytest "$SRC_DIR/backend/tests/" -v
+    echo ""
+    echo "Running frontend E2E tests..."
+    "$VENV/bin/python" -m pytest "$SRC_DIR/frontend/tests/" -v
+    echo ""
+    echo "Done."
     ;;
   *)
     echo "Usage: $0 {up|down|test}"

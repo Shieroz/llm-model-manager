@@ -62,17 +62,33 @@ State is persisted in `/models/served/state.json`. Model cache lives at `/models
 
 ## Development
 
-Modular Python backend (`src/backend/`) with vanilla HTML/CSS frontend (`src/frontend/`).
+Modular Python backend (`src/backend/`) with vanilla HTML/CSS/JS frontend (`src/frontend/`).
 
 ### Tests
 
-94 tests across 8 test files. Run locally without Docker:
+127 tests across 9 test files. Run locally without Docker:
 
 ```bash
 ./up.sh test
 ```
 
-Covers: config, models, state, cache, hf_hub, sync, websocket, and api handlers.
+Covers: backend (config, models, state, cache, hf_hub, sync, websocket, api) + frontend (HTML structure, form elements, API routes, styling, layout, WebSocket).
+
+### Frontend Structure
+
+The frontend SPA has been modularized from a single ~700-line inline script into 9 separate JS modules:
+
+| Module | Purpose |
+|---|---|
+| `state.js` | Shared application state |
+| `utils.js` | DOM helpers, debounce, JSON validation |
+| `api.js` | API communication functions |
+| `filter.js` | Client-side search/filter |
+| `localmodels.js` | Disk storage data fetching |
+| `render.js` | UI rendering (cards, progress bars) |
+| `ws.js` | WebSocket connection management |
+| `form.js` | Form handling and validation |
+| `app.js` | Main entry point, wires modules together |
 
 ### Source Structure
 
@@ -88,3 +104,5 @@ Covers: config, models, state, cache, hf_hub, sync, websocket, and api handlers.
 | `src/backend/sync.py` | llama-swap config sync |
 | `src/backend/download.py` | PTY-based model downloads |
 | `src/backend/websocket.py` | WebSocket connection manager |
+| `src/frontend/index.html` | SPA HTML (forms, layout, styling) |
+| `src/frontend/js/*.js` | 9 modular JavaScript files |

@@ -86,18 +86,20 @@ async def lifespan(app: FastAPI):
 
 # --- App ---
 app = FastAPI(title="Local LLM Model Manager", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+_frontend_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
+app.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
+app.mount("/js", StaticFiles(directory=os.path.join(_frontend_dir, "js")), name="js")
 
 
 # --- UI Routes ---
 @app.get("/")
 async def serve_ui():
-    return FileResponse("frontend/index.html")
+    return FileResponse(os.path.join(_frontend_dir, "index.html"))
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    return FileResponse("frontend/favicon.ico")
+    return FileResponse(os.path.join(_frontend_dir, "favicon.ico"))
 
 
 # --- WebSocket ---
