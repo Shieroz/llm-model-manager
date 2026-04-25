@@ -60,6 +60,10 @@ LLAMA_BACKEND=openvino ./up.sh
 - **Sync tests** create mock cache objects matching `scan_cache_dir` return structure: `repos` → `repo_id`, `revisions` → `commit_hash`, `files` → `file_name`/`file_path`/`size_on_disk`.
 - **Frontend tests** use httpx + BeautifulSoup (no browser required). A test server fixture starts an isolated backend with patched paths.
 
+## RPC Mode
+
+Toggle via `/api/rpc_mode` — only models with `"rpc": true` in their params are synced when RPC mode is active. Filtered view in the UI shows RPC or Local configs based on the toggle state.
+
 ## Frontend Module Structure
 The inline JS (~700 lines) has been modularized into 9 files loaded via `<script>` tags:
 - `state.js` — Shared application state (configs, models, expanded sets, RPC mode)

@@ -54,6 +54,14 @@ State is persisted in `/models/served/state.json`. Model cache lives at `/models
 | `POST` | `/api/rpc_mode` | Toggle RPC mode for combining GPU power |
 | `WS` | `/ws` | Real-time state updates |
 
+## RPC Mode
+
+Enable RPC mode to combine GPU power across multiple machines. Only models with `"rpc": true` in their parameters are synced when RPC mode is active. Toggle via the RPC Mode switch in the UI or:
+
+```bash
+curl -X POST http://localhost:8000/api/rpc_mode -H 'Content-Type: application/json' -d '{"enabled": true}'
+```
+
 ## CSS (no Node.js)
 
 ```bash
