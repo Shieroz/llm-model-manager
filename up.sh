@@ -1,12 +1,15 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$SCRIPT_DIR/.env" ] && set -a && . "$SCRIPT_DIR/.env" && set +a
+
 case "${1:-help}" in
   up)
     BACKEND="${LLAMA_BACKEND:-cuda}"
     case "$BACKEND" in
       vulkan) OVERRIDE="docker-compose.vulkan.yml" ;;
       cuda)   OVERRIDE="docker-compose.cuda.yml" ;;
-      sycl)   OVERRIDE="compose.sycl.yml" ;;
+      sycl)   OVERRIDE="docker-compose.sycl.yml" ;;
       *)      echo "Unknown LLAMA_BACKEND: $BACKEND (expected 'cuda', 'vulkan' or 'sycl')"; exit 1 ;;
     esac
     echo "Starting with backend: $BACKEND"

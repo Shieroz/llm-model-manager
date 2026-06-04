@@ -103,6 +103,11 @@ async def favicon():
     return FileResponse(os.path.join(_frontend_dir, "favicon.ico"))
 
 
+@app.get("/icon.jpg", include_in_schema=False)
+async def icon():
+    return FileResponse(os.path.join(_frontend_dir, "icon.jpg"))
+
+
 # --- WebSocket ---
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
