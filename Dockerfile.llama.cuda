@@ -9,7 +9,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-RUN git clone https://github.com/ggml-org/llama.cpp.git .
+# LLAMA_CPP_REF is the single source of truth for the llama.cpp version across
+# all backends — set it in docker-compose.yml / .env, not here. Pinning makes
+# builds reproducible AND busts the git-clone layer when the ref changes (a bare
+# `git clone` would otherwise stay cached, freezing an old pre-MTP checkout).
+ARG LLAMA_CPP_REF
+RUN git clone https://github.com/ggml-org/llama.cpp.git . && git checkout "${LLAMA_CPP_REF}"
 
 # Kept Architecture 86 for the target 3090, disabled shared libs, targeted server
 RUN cmake -B build \

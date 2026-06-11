@@ -37,7 +37,9 @@ RUN mkdir -p /opt/intel && \
 ENV OpenVINO_DIR=/opt/intel/openvino
 
 WORKDIR /app
-RUN git clone https://github.com/ggml-org/llama.cpp.git .
+# LLAMA_CPP_REF — single source of truth in docker-compose.yml / .env (see Dockerfile.llama.cuda).
+ARG LLAMA_CPP_REF
+RUN git clone https://github.com/ggml-org/llama.cpp.git . && git checkout "${LLAMA_CPP_REF}"
 
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build -G Ninja \

@@ -97,3 +97,63 @@ class TestPruneUnreferencedRevisions:
         cache_dir = tmp_state_dir / ".cache"
         cache_dir.mkdir(exist_ok=True)
         prune_unreferenced_revisions(sample_state)
+
+
+class TestInUseFiles:
+    def test_maps_quant_and_mmproj(self, sample_state):
+        from backend.cache import in_use_files
+        result = in_use_files(sample_state)
+        key = ("test/repo", "abc123def456")
+        assert result[key]["quants"] == {"Q4_K_M"}
+        assert result[key]["mmprojs"] == set()
+
+
+class TestPruneUnreferencedFiles:
+    def _mock_file(self, tmp_path, name):
+        blob = tmp_path / f"blob-{name}"
+        blob.write_text("x")
+        link = tmp_path / name
+        link.symlink_to(blob)
+        f = MagicMock()
+        f.file_name = name
+        f.file_path = link
+        f.blob_path = blob
+        f.size_on_disk = 1
+        return f, blob, link
+
+    def _mock_cache(self, sha, files):
+        rev = MagicMock()
+        rev.commit_hash = sha
+        rev.files = files
+        repo = MagicMock()
+        repo.repo_id = "test/repo"
+        repo.revisions = [rev]
+        cache = MagicMock()
+        cache.repos = [repo]
+        return cache
+
+    @patch("backend.cache.scan_cache")
+    def test_removes_orphan_quant_keeps_referenced(self, mock_scan, sample_state, tmp_path):
+        from backend.cache import prune_unreferenced_files
+        used_f, used_blob, used_link = self._mock_file(tmp_path, "model-Q4_K_M.gguf")
+        orphan_f, orphan_blob, orphan_link = self._mock_file(tmp_path, "model-Q8_0.gguf")
+        mock_scan.return_value = self._mock_cache("abc123def456", [used_f, orphan_f])
+        prune_unreferenced_files(sample_state)
+        assert used_link.exists() and used_blob.exists()
+        assert not orphan_link.exists() and not orphan_blob.exists()
+
+    @patch("backend.cache.scan_cache")
+    def test_protects_mtp_head_file(self, mock_scan, sample_state, tmp_path):
+        from backend.cache import prune_unreferenced_files
+        head_f, head_blob, head_link = self._mock_file(tmp_path, "mtp-model-Q8_0.gguf")
+        mock_scan.return_value = self._mock_cache("abc123def456", [head_f])
+        prune_unreferenced_files(sample_state)
+        assert head_link.exists()  # "mtp" in name -> never auto-deleted
+
+    @patch("backend.cache.scan_cache")
+    def test_skips_unreferenced_revision(self, mock_scan, sample_state, tmp_path):
+        from backend.cache import prune_unreferenced_files
+        f, blob, link = self._mock_file(tmp_path, "model-Q8_0.gguf")
+        mock_scan.return_value = self._mock_cache("UNREFERENCED_SHA", [f])
+        prune_unreferenced_files(sample_state)
+        assert link.exists()  # revision not in state -> left to revision-level prune

@@ -12,6 +12,9 @@ const Form = (() => {
         mmprojSelect.addEventListener("change", updateMmprojJSON);
         symlinkInput.addEventListener("input", updateMmprojJSON);
 
+        Utils.getEl("mtp_toggle").addEventListener("change", updateMtpJSON);
+        Utils.getEl("mtp_n_max").addEventListener("input", updateMtpJSON);
+
         paramInput.addEventListener("input", validateJson);
         paramInput.addEventListener("blur", autoFormatJson);
 
@@ -56,6 +59,59 @@ const Form = (() => {
             }
             paramInput.value = JSON.stringify(parsed, null, 2);
             paramInput.dispatchEvent(new Event("input"));
+        } catch (e) {}
+    }
+
+    // Heuristic: a grafted-MTP repo carries "mtp" as a token in its name (e.g.
+    // unsloth/Qwen3.6-27B-MTP-GGUF) and bakes the MTP head into the quant file.
+    // Anything else needs a separate runtime head (gemma-style), so we surface the
+    // head-repo field for those.
+    function repoLooksGrafted() {
+        const repo = (Utils.getEl("hf_repo").value || "");
+        return /(^|[\/\-_.])mtp([\/\-_.]|$)/i.test(repo);
+    }
+
+    // Show the MTP head-repo field only when MTP is on AND the model isn't grafted.
+    function updateMtpHeadVisibility() {
+        const on = Utils.getEl("mtp_toggle").checked;
+        const show = on && !repoLooksGrafted();
+        Utils.getEl("mtp_head_repo_row").classList.toggle("hidden", !show);
+    }
+
+    // MTP helper: inject/remove spec-type=draft-mtp (+ spec-draft-n-max) in the params JSON.
+    // This only wires the flags — the model itself must be an MTP-prepared GGUF.
+    function updateMtpJSON() {
+        const toggle = Utils.getEl("mtp_toggle");
+        const nMaxInput = Utils.getEl("mtp_n_max");
+        Utils.getEl("mtp_options").classList.toggle("hidden", !toggle.checked);
+        updateMtpHeadVisibility();
+        try {
+            const parsed = JSON.parse(paramInput.value);
+            if (toggle.checked) {
+                parsed["spec-type"] = "draft-mtp";
+                parsed["spec-draft-n-max"] = parseInt(nMaxInput.value, 10) || 2;
+            } else {
+                delete parsed["spec-type"];
+                delete parsed["spec-draft-n-max"];
+            }
+            paramInput.value = JSON.stringify(parsed, null, 2);
+            paramInput.dispatchEvent(new Event("input"));
+        } catch (e) {}
+    }
+
+    // Reflect MTP state from the current params JSON (used on edit / load).
+    function syncMtpFromParams() {
+        const toggle = Utils.getEl("mtp_toggle");
+        const nMaxInput = Utils.getEl("mtp_n_max");
+        try {
+            const parsed = JSON.parse(paramInput.value);
+            const on = parsed["spec-type"] === "draft-mtp";
+            toggle.checked = on;
+            if (on && parsed["spec-draft-n-max"] != null) {
+                nMaxInput.value = parsed["spec-draft-n-max"];
+            }
+            Utils.getEl("mtp_options").classList.toggle("hidden", !on);
+            updateMtpHeadVisibility();
         } catch (e) {}
     }
 
@@ -163,11 +219,15 @@ const Form = (() => {
         clearBtn.className = "bg-gray-600 hover:bg-gray-500 text-white py-2 px-4 rounded transition shadow";
 
         paramInput.value = JSON.stringify(defaultParams, null, 2);
+        Utils.getEl("mtp_toggle").checked = false;
+        Utils.getEl("mtp_options").classList.add("hidden");
+        Utils.getEl("mtp_head_repo").value = "";
+        Utils.getEl("mtp_head_repo_row").classList.add("hidden");
         Utils.hideStatus();
 
         paramInput.classList.remove("border-red-500", "focus:ring-red-500", "border-green-500", "focus:ring-green-500");
         paramInput.classList.add("border-gray-600", "focus:ring-blue-500");
     }
 
-    return { init, resetForm, getSelectedRevision };
+    return { init, resetForm, getSelectedRevision, syncMtpFromParams, updateMtpHeadVisibility };
 })();

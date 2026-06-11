@@ -62,6 +62,36 @@ Enable RPC mode to combine GPU power across multiple machines. Only models with 
 curl -X POST http://localhost:8000/api/rpc_mode -H 'Content-Type: application/json' -d '{"enabled": true}'
 ```
 
+## MTP (Multi-Token Prediction)
+
+llama-server is built with MTP speculative decoding. The llama.cpp version is pinned
+via `LLAMA_CPP_REF` (single source of truth in `docker-compose.yml`, overridable in
+`.env`) — bump it to rebuild against a newer commit; changing it busts the cached
+git-clone layer.
+
+MTP is **model-specific** — it only works with MTP-prepared GGUFs (e.g. `Qwen3.6-MTP`),
+not arbitrary models. Two distribution patterns:
+
+- **Grafted GGUFs** (MTP layers baked into the quant file, e.g. `unsloth/Qwen3.6-27B-MTP-GGUF`):
+  tick *Enable MTP* in the deploy form, or add `"spec-type": "draft-mtp"` (and optionally
+  `"spec-draft-n-max": N`) to the parameters JSON. Works out of the box. Verified ~1.7×
+  speedup on Qwen3.6-27B at `spec-draft-n-max: 4` (see `scripts/bench_mtp_nmax.sh`).
+- **Separate-head repos** (purpose-built draft module shipped alongside the main model,
+  e.g. gemma-4's `gemma4-assistant` head `mtp-gemma-4-31B-it.gguf` in
+  `unsloth/gemma-4-31B-it-qat-GGUF`): additionally set
+  `"model-draft": "/models/.../<head>.gguf"` in the parameters. Verified loading +
+  drafting on gemma-4-31B. ⚠️ Not every `*-MTP.gguf` works this way — some "head-only"
+  repos are **graft sources** for a `convert.py` step (incomplete hparams, declare the
+  full base arch) and fail to load as a runtime draft; those must be grafted into the
+  base GGUF first.
+
+The *Enable MTP* checkbox only wires the flags; it does not validate that the model
+actually carries MTP heads.
+
+> **Pin note:** `LLAMA_CPP_REF` is held at `d2462f8f` deliberately. The next commit
+> (`e95dae18`, #24086) regresses loading of dense non-MTP `qwen35` models (e.g. plain
+> `Qwen3.6-27B`). Re-verify model loading when bumping the pin.
+
 ## CSS (no Node.js)
 
 ```bash

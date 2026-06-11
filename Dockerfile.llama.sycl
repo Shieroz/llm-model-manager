@@ -14,6 +14,9 @@ WORKDIR /app
 # RUN git clone https://github.com/ggml-org/llama.cpp.git .
 
 # Issues Solve Branch
+# NOTE: SYCL builds from this fork (Intel q8_0-reorder fix) which does NOT yet
+# contain MTP support, so it is intentionally left out of the LLAMA_CPP_REF pin.
+# Revisit once the fix lands upstream or the fork rebases onto a MTP-capable commit.
 RUN git clone --branch fix/q8_0-reorder-dequantize https://github.com/PMZFX/llama.cpp.git .
 
 RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \

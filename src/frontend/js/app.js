@@ -96,6 +96,7 @@ const App = (() => {
             params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
         }
         Utils.getEl("parameters").value = JSON.stringify(params, null, 2);
+        Form.syncMtpFromParams();
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -130,6 +131,7 @@ const App = (() => {
             params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
         }
         Utils.getEl("parameters").value = JSON.stringify(params, null, 2);
+        Form.syncMtpFromParams();
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -334,6 +336,7 @@ const App = (() => {
             const repo = e.target.value.trim();
             const inputs = ["branch_select", "commit_select", "commit_sha", "quant", "symlink_name", "mmproj"];
             inputs.forEach(id => Utils.getEl(id).disabled = true);
+            Form.updateMtpHeadVisibility();
 
             if (!repo.includes("/")) {
                 Utils.getEl("branch_select").innerHTML = '<option value="">Enter a repo first</option>';
