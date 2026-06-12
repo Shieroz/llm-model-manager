@@ -55,6 +55,7 @@ const Render = (() => {
         const statusBadge = buildStatusBadge(conf);
         const progressUI = isDownloading ? buildProgressUI(conf) : "";
         const paramsHtml = buildParamsHtml(params);
+        const servedHtml = isDownloading ? "" : buildServedPaths(conf);
         const buttons = buildButtons(conf);
 
         const revisionBadge = revision
@@ -72,11 +73,26 @@ const Render = (() => {
                     </h3>
                     <p class="text-xs text-gray-500 mb-3 font-mono mt-1 truncate">Repo: ${Utils.escapeHtml(repo)}</p>
                     <div class="flex flex-wrap mt-2">${paramsHtml}</div>
+                    ${servedHtml}
                 </div>
                 ${buttons}
             </div>
             ${progressUI}
         `;
+    }
+
+    // Served symlink paths for this config — handy for copying into another model's
+    // `model-draft` (e.g. a cross-repo MTP draft head wired by hand).
+    function buildServedPaths(conf) {
+        const { name, quant, mmproj, mtp_head } = conf;
+        const paths = [[`${quant}`, `/models/served/${name}-${quant}.gguf`]];
+        if (mmproj) paths.push(["mmproj", `/models/served/${name}-mmproj-${mmproj.toUpperCase()}.gguf`]);
+        if (mtp_head) paths.push(["mtp-head", `/models/served/${name}-mtp-head.gguf`]);
+        const rows = paths.map(([label, p]) =>
+            `<div class="flex items-baseline gap-2"><span class="text-gray-500 shrink-0">${Utils.escapeHtml(label)}:</span>` +
+            `<code class="text-gray-300 break-all select-all cursor-text" title="Click to select, then copy">${Utils.escapeHtml(p)}</code></div>`
+        ).join("");
+        return `<div class="mt-2 text-[11px] font-mono bg-gray-900/60 border border-gray-700 rounded px-2 py-1 space-y-0.5">${rows}</div>`;
     }
 
     function buildStatusBadge(conf) {

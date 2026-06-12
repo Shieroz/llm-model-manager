@@ -5,7 +5,7 @@ import shutil
 
 from huggingface_hub import scan_cache_dir
 
-from backend.config import CACHE_DIR, QUANT_REGEX
+from backend.config import CACHE_DIR, QUANT_REGEX, is_mtp_head_file
 from backend.state import iter_configs
 
 log = logging.getLogger(__name__)
@@ -117,11 +117,11 @@ def prune_unreferenced_files(state: dict) -> None:
                 low = fname.lower()
                 if not low.endswith(".gguf"):
                     continue
-                if "mtp" in low:
-                    # Conservatively skip MTP/draft-head files (e.g. gemma's mtp-*.gguf):
-                    # they aren't tracked in state yet and some are runtime heads we must
-                    # not delete. A grafted main GGUF that embeds "MTP" in its filename
-                    # simply won't be pruned here (residual disk, never data loss).
+                if is_mtp_head_file(fname, getattr(f, "size_on_disk", 0)):
+                    # Never auto-delete a small draft head (mtp/assistant/nextn/eagle);
+                    # it may be wired via model-draft. A grafted *main* GGUF that embeds
+                    # "MTP" in its filename is large, so it isn't matched here and can
+                    # still be pruned when orphaned.
                     continue
                 quant = _file_quant(fname)
                 if quant is None:

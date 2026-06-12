@@ -85,7 +85,17 @@ def sync_system(state: dict, restart: bool = True) -> None:
             elif matched_q == quant.upper():
                 quant_files.append(cf)
 
-        if not quant_files or (mmproj and mmproj_file is None):
+        # MTP draft head — lives in the same snapshot as the main quant.
+        head_file = data.get("mtp_head", "")
+        head_cf = None
+        if head_file:
+            head_base = os.path.basename(head_file)
+            for cf in rev.files:
+                if os.path.basename(str(cf.file_path)) == head_base:
+                    head_cf = cf
+                    break
+
+        if not quant_files or (mmproj and mmproj_file is None) or (head_file and head_cf is None):
             log.warning(f"Required files missing in snapshot for {name}. Marking missing.")
             if data.get("status") != "missing":
                 data["status"] = "missing"
@@ -126,8 +136,26 @@ def sync_system(state: dict, restart: bool = True) -> None:
                 pass
             cmd_args.extend(["--mmproj", mmproj_path])
 
+        if head_cf is not None:
+            head_path = os.path.join(SERVED_DIR, f"{name}-mtp-head.gguf")
+            try:
+                os.symlink(str(head_cf.file_path), head_path)
+            except FileExistsError:
+                pass
+            # Speculative decoding via the draft head. spec-type defaults to draft-mtp
+            # unless overridden in params; model-draft path is managed here.
+            if "spec-type" not in params:
+                cmd_args.extend(["--spec-type", "draft-mtp"])
+            cmd_args.extend(["--model-draft", head_path])
+
+        # When we manage the draft head, ignore any model-draft/md in params (we supply
+        # the symlink path). Otherwise pass them through so manual cross-repo wiring works.
+        skip_keys = {"host", "port", "model", "mmproj"}
+        if head_cf is not None:
+            skip_keys |= {"model-draft", "md"}
+
         for k, v in params.items():
-            if k in ("host", "port", "model", "mmproj"):
+            if k in skip_keys:
                 continue
             flag = f"-{k}" if k in LLAMA_SHORT_FLAGS else f"--{k}"
             if v is None or (isinstance(v, bool) and v):

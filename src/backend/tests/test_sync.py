@@ -81,3 +81,72 @@ class TestSyncSystem:
 
         sync_system(sample_state, restart=False)
         mock_threading.Thread.assert_not_called()
+
+    @patch("backend.sync.os.path.isdir", return_value=True)
+    @patch("huggingface_hub.scan_cache_dir")
+    def test_emits_model_draft_for_same_repo_head(self, mock_scan, mock_isdir, tmp_state_dir):
+        state = {
+            "_meta": {"rpc_mode": False},
+            "headcfg": {
+                "repo": "u/main-GGUF", "quant": "Q4_K_M", "mmproj": "",
+                "params": {}, "status": "ready", "revision": "mainsha",
+                "mtp_head": "mtp-head.gguf",
+            },
+        }
+        save_state(state)
+
+        def mk(name):
+            cf = MagicMock()
+            cf.file_name = name
+            cf.file_path = f"/models/.cache/blobs/{name}"
+            cf.size_on_disk = 100
+            return cf
+
+        rev = MagicMock()
+        rev.commit_hash = "mainsha"
+        rev.files = [mk("model-Q4_K_M.gguf"), mk("mtp-head.gguf")]
+        repo = MagicMock()
+        repo.repo_id = "u/main-GGUF"
+        repo.revisions = [rev]
+        cache = MagicMock()
+        cache.repos = [repo]
+        mock_scan.return_value = cache
+
+        sync_system(state, restart=False)
+
+        with open(os.path.join(str(tmp_state_dir), "config.yaml")) as f:
+            data = yaml.safe_load(f)
+        cmd = data["models"]["headcfg-Q4_K_M"]["cmd"]
+        assert "--model-draft" in cmd
+        assert "headcfg-mtp-head.gguf" in cmd
+        assert "--spec-type draft-mtp" in cmd
+        assert state["headcfg"]["status"] == "ready"
+
+    @patch("backend.sync.os.path.isdir", return_value=True)
+    @patch("huggingface_hub.scan_cache_dir")
+    def test_marks_missing_when_head_absent(self, mock_scan, mock_isdir, tmp_state_dir):
+        state = {
+            "_meta": {"rpc_mode": False},
+            "headcfg": {
+                "repo": "u/main-GGUF", "quant": "Q4_K_M", "mmproj": "",
+                "params": {}, "status": "ready", "revision": "mainsha",
+                "mtp_head": "mtp-head.gguf",
+            },
+        }
+        save_state(state)
+        cf = MagicMock()
+        cf.file_name = "model-Q4_K_M.gguf"
+        cf.file_path = "/models/.cache/blobs/model-Q4_K_M.gguf"
+        cf.size_on_disk = 100
+        rev = MagicMock()
+        rev.commit_hash = "mainsha"
+        rev.files = [cf]  # quant present, head missing
+        repo = MagicMock()
+        repo.repo_id = "u/main-GGUF"
+        repo.revisions = [rev]
+        cache = MagicMock()
+        cache.repos = [repo]
+        mock_scan.return_value = cache
+
+        sync_system(state, restart=False)
+        assert state["headcfg"]["status"] == "missing"

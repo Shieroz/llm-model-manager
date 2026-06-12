@@ -96,6 +96,7 @@ const App = (() => {
             params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
         }
         Utils.getEl("parameters").value = JSON.stringify(params, null, 2);
+        Utils.getEl("mtp_head").value = conf.mtp_head || "";
         Form.syncMtpFromParams();
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -131,6 +132,7 @@ const App = (() => {
             params.mmproj = `/models/served/${conf.name}-mmproj-${conf.mmproj.toUpperCase()}.gguf`;
         }
         Utils.getEl("parameters").value = JSON.stringify(params, null, 2);
+        Utils.getEl("mtp_head").value = conf.mtp_head || "";
         Form.syncMtpFromParams();
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -328,6 +330,8 @@ const App = (() => {
             mmprojContainer.classList.add("hidden");
             mmprojSelect.disabled = true;
         }
+
+        Form.applyMtpUI(data);
     }
 
     function initRepoDebounce() {
@@ -336,7 +340,7 @@ const App = (() => {
             const repo = e.target.value.trim();
             const inputs = ["branch_select", "commit_select", "commit_sha", "quant", "symlink_name", "mmproj"];
             inputs.forEach(id => Utils.getEl(id).disabled = true);
-            Form.updateMtpHeadVisibility();
+            Form.hideMtp();
 
             if (!repo.includes("/")) {
                 Utils.getEl("branch_select").innerHTML = '<option value="">Enter a repo first</option>';

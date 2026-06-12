@@ -3,11 +3,31 @@ from backend.config import (
     CONFIG_PATH,
     LLAMA_SHORT_FLAGS,
     LLAMA_SWAP_CONTAINER,
+    MTP_HEAD_MAX_BYTES,
     QUANT_REGEX,
     SERVED_DIR,
     SHA_RE,
+    is_mtp_head_file,
 )
 import re
+
+
+class TestIsMtpHeadFile:
+    def test_small_named_heads(self):
+        assert is_mtp_head_file("mtp-gemma-4-31B-it.gguf", 280_000_000)
+        assert is_mtp_head_file("model-assistant.gguf", 300_000_000)
+        assert is_mtp_head_file("foo-nextn.gguf", 300_000_000)
+        assert is_mtp_head_file("bar-eagle.gguf", 300_000_000)
+
+    def test_large_grafted_main_not_a_head(self):
+        assert not is_mtp_head_file("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", MTP_HEAD_MAX_BYTES + 1)
+
+    def test_mmproj_and_plain_quant_not_heads(self):
+        assert not is_mtp_head_file("mmproj-mtp-F16.gguf", 300_000_000)
+        assert not is_mtp_head_file("model-Q4_K_M.gguf", 300_000_000)
+
+    def test_zero_size_skips_cap(self):
+        assert is_mtp_head_file("mtp-head.gguf", 0)
 
 
 class TestConstants:

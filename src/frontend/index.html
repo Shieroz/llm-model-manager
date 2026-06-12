@@ -86,21 +86,20 @@
                         <label class="block text-sm text-gray-400">Symlink Name *</label>
                         <input type="text" id="symlink_name" disabled required class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-2 text-white focus:ring-blue-500 disabled:opacity-50">
                     </div>
-                    <div class="bg-gray-900/40 border border-gray-700 rounded p-2">
-                        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                            <input type="checkbox" id="mtp_toggle" class="accent-blue-500">
-                            <span>Enable MTP (multi-token prediction)</span>
-                        </label>
-                        <div id="mtp_options" class="hidden mt-2 flex items-center gap-2">
+                    <div id="mtp_box" class="hidden bg-gray-900/40 border border-gray-700 rounded p-2 space-y-2">
+                        <span class="block text-sm text-gray-300 font-medium">MTP (multi-token prediction)</span>
+                        <p id="mtp_grafted_note" class="hidden text-xs text-blue-400">Grafted MTP build detected — <code class="text-gray-400">spec-type: draft-mtp</code> added to the parameters automatically. Remove it there to disable.</p>
+                        <div id="mtp_head_row" class="hidden">
+                            <label for="mtp_head" class="block text-xs text-gray-400">Draft head (separate-head model)</label>
+                            <select id="mtp_head" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-1 text-white text-sm">
+                                <option value="">None</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">Downloads the head from this repo, symlinks it, and passes <code class="text-gray-400">--model-draft</code> automatically.</p>
+                        </div>
+                        <div id="mtp_nmax_row" class="hidden flex items-center gap-2">
                             <label for="mtp_n_max" class="text-xs text-gray-400">Max draft tokens</label>
-                            <input type="number" id="mtp_n_max" min="1" max="8" value="2" class="w-16 bg-gray-700 border-gray-600 rounded p-1 text-white text-sm">
+                            <input type="number" id="mtp_n_max" min="1" max="8" value="4" class="w-16 bg-gray-700 border-gray-600 rounded p-1 text-white text-sm">
                         </div>
-                        <div id="mtp_head_repo_row" class="hidden mt-2">
-                            <label for="mtp_head_repo" class="block text-xs text-gray-400">MTP head repo (separate-head models)</label>
-                            <input type="text" id="mtp_head_repo" placeholder="e.g. unsloth/gemma-4-31B-it-qat-GGUF" class="mt-1 w-full bg-gray-700 border-gray-600 rounded p-1 text-white text-sm">
-                            <p class="text-xs text-amber-500/80 mt-1">This repo doesn't look like a grafted-MTP build, so its main GGUF has no MTP head. Point to a repo that ships a runtime MTP head (e.g. gemma-4's <code class="text-gray-400">gemma4-assistant</code>). For now also set <code class="text-gray-400">model-draft</code> in the parameters — auto-download of the head is not wired yet.</p>
-                        </div>
-                        <p class="text-xs text-gray-500 mt-1">Only for MTP-prepared GGUFs (e.g. Qwen3.6-MTP). Adds <code class="text-gray-400">spec-type: draft-mtp</code> to the parameters below — has no effect on regular models.</p>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400">Parameters (JSON) *</label>

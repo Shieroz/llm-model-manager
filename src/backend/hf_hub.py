@@ -54,12 +54,16 @@ def get_commits(repo: str, limit: int = 50, revision: str = "main") -> list:
     return result
 
 
-def pre_flight_size(repo: str, sha: str, quant: str, mmproj: str) -> int:
+def pre_flight_size(repo: str, sha: str, quant: str, mmproj: str, head_file: str = "") -> int:
     api = HfApi(token=None)
     info = api.model_info(repo, revision=sha, files_metadata=True)
     total = 0
     for f in info.siblings:
         if not f.size or not f.rfilename.endswith(".gguf"):
+            continue
+        # MTP draft head lives in the same repo; size it by exact rfilename.
+        if head_file and f.rfilename == head_file:
+            total += f.size
             continue
         match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
         if not match:

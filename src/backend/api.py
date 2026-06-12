@@ -7,7 +7,7 @@ import shutil
 from fastapi import BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
 
 from backend.cache import scan_cache, prune_unreferenced_revisions
-from backend.config import QUANT_REGEX
+from backend.config import QUANT_REGEX, is_mtp_head_file
 from backend.hf_hub import get_branches, get_commits, pre_flight_size, resolve_sha
 from backend.models import ModelSetup, RevisionDeleteReq, RpcModeReq
 from backend.state import format_bytes, iter_configs, load_state, save_state
@@ -36,15 +36,21 @@ async def get_quants(repo: str):
         info = api.model_info(repo, files_metadata=True)
         quants_dict = {}
         mmproj_dict = {}
+        heads_list = []
 
         for f in info.siblings:
             if not f.rfilename.endswith(".gguf"):
+                continue
+            q_size = f.size or 0
+            # Detect separate MTP draft heads first so they don't leak into the quant
+            # list (a head like "...-Q8_0-MTP.gguf" would otherwise match QUANT_REGEX).
+            if is_mtp_head_file(f.rfilename, q_size):
+                heads_list.append({"name": f.rfilename, "size_str": format_bytes(q_size), "raw": q_size})
                 continue
             match = re.search(QUANT_REGEX, f.rfilename, re.IGNORECASE)
             if not match:
                 continue
             q_name = match.group(1).upper()
-            q_size = f.size or 0
             if "mmproj" in f.rfilename.lower():
                 mmproj_dict[q_name] = mmproj_dict.get(q_name, 0) + q_size
             else:
@@ -54,9 +60,10 @@ async def get_quants(repo: str):
         quants_list.sort(key=lambda x: x["raw"], reverse=True)
         mmproj_list = [{"name": q, "size_str": format_bytes(s), "raw": s} for q, s in mmproj_dict.items()]
         mmproj_list.sort(key=lambda x: x["raw"], reverse=True)
+        heads_list.sort(key=lambda x: x["raw"], reverse=True)
 
         repo_name = repo.rsplit("/", 1)[-1] if "/" in repo else repo
-        return {"quants": quants_list, "mmprojs": mmproj_list, "repoName": repo_name}
+        return {"quants": quants_list, "mmprojs": mmproj_list, "heads": heads_list, "repoName": repo_name}
     except Exception as e:
         log.error(f"Failed to fetch quants for {repo}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -225,6 +232,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         or existing.get("repo") != req.hf_repo
         or existing.get("quant") != req.quant
         or existing.get("mmproj", "") != req.mmproj
+        or existing.get("mtp_head", "") != req.mtp_head
         or existing.get("revision") != resolved_sha
         or existing.get("status") == "missing"
     )
@@ -233,7 +241,8 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
     if needs_download:
         os.makedirs("/models/.cache", exist_ok=True)
         try:
-            model_size = pre_flight_size(req.hf_repo, resolved_sha, req.quant, req.mmproj)
+            model_size = pre_flight_size(req.hf_repo, resolved_sha, req.quant, req.mmproj,
+                                         head_file=req.mtp_head)
         except Exception as e:
             log.error(f"Pre-flight API check failed: {e}")
             raise HTTPException(status_code=400, detail=f"API Error: {e}")
@@ -254,6 +263,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         "params": params_dict,
         "status": "downloading" if needs_download else "ready",
         "revision": resolved_sha,
+        "mtp_head": req.mtp_head,
     }
     save_state(state)
 

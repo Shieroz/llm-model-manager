@@ -21,6 +21,8 @@ def process_model(req: ModelSetup) -> None:
     patterns = [f"*{req.quant}.gguf", f"*{req.quant}-*-of-*.gguf"]
     if req.mmproj:
         patterns.append(f"*mmproj*{req.mmproj}*.gguf")
+    if req.mtp_head:
+        patterns.append(req.mtp_head)  # exact rfilename of the draft head (same repo)
 
     script_code = f"""
 import os
