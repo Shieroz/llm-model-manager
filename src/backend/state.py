@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 
 from backend.config import SERVED_DIR, STATE_FILE
 
@@ -24,8 +25,14 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     os.makedirs(SERVED_DIR, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    # Atomic write: a concurrent reader (e.g. the 1 Hz state broadcaster) must never
+    # observe a half-written file. Write to a unique temp then os.replace (atomic).
+    tmp = f"{STATE_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, STATE_FILE)
 
 
 def iter_configs(state: dict):

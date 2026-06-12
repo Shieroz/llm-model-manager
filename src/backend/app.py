@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI):
                 symlink_name=name,
                 parameters=json.dumps(data["params"]),
                 revision=data["revision"],
+                mtp_head=data.get("mtp_head", ""),
             )
             threading.Thread(target=process_model, args=(req,), daemon=True).start()
         elif data.get("status") == "downloading":

@@ -46,7 +46,7 @@ State is persisted in `/models/served/state.json`. Model cache lives at `/models
 |---|---|---|
 | `GET` | `/` | Frontend UI |
 | `GET` | `/api/models` | List cached models & revisions |
-| `GET` | `/api/quants?repo=...` | Available quant variants for a HF repo |
+| `GET` | `/api/quants?repo=...` | Available quants, mmproj projectors & MTP draft heads for a HF repo |
 | `GET` | `/api/commits?repo=...` | Commit history with pin status |
 | `POST` | `/api/setup` | Deploy a model (downloads if needed) |
 | `DELETE` | `/api/configs/{name}` | Remove a config (auto-prunes cache) |
@@ -69,24 +69,27 @@ via `LLAMA_CPP_REF` (single source of truth in `docker-compose.yml`, overridable
 `.env`) — bump it to rebuild against a newer commit; changing it busts the cached
 git-clone layer.
 
-MTP is **model-specific** — it only works with MTP-prepared GGUFs (e.g. `Qwen3.6-MTP`),
-not arbitrary models. Two distribution patterns:
+MTP is **model-specific** — it only works with MTP-prepared GGUFs, not arbitrary models.
+The deploy form handles three distribution patterns:
 
-- **Grafted GGUFs** (MTP layers baked into the quant file, e.g. `unsloth/Qwen3.6-27B-MTP-GGUF`):
-  tick *Enable MTP* in the deploy form, or add `"spec-type": "draft-mtp"` (and optionally
-  `"spec-draft-n-max": N`) to the parameters JSON. Works out of the box. Verified ~1.7×
-  speedup on Qwen3.6-27B at `spec-draft-n-max: 4` (see `scripts/bench_mtp_nmax.sh`).
-- **Separate-head repos** (purpose-built draft module shipped alongside the main model,
-  e.g. gemma-4's `gemma4-assistant` head `mtp-gemma-4-31B-it.gguf` in
-  `unsloth/gemma-4-31B-it-qat-GGUF`): additionally set
-  `"model-draft": "/models/.../<head>.gguf"` in the parameters. Verified loading +
-  drafting on gemma-4-31B. ⚠️ Not every `*-MTP.gguf` works this way — some "head-only"
-  repos are **graft sources** for a `convert.py` step (incomplete hparams, declare the
-  full base arch) and fail to load as a runtime draft; those must be grafted into the
-  base GGUF first.
+1. **Grafted GGUFs** (MTP layers baked into the quant file, e.g. `unsloth/Qwen3.6-27B-MTP-GGUF`):
+   detected automatically from the `mtp` token in the repo name — the form injects
+   `"spec-type": "draft-mtp"` (+ a max-draft-tokens field) into the parameters JSON for you.
+   Remove it there to disable. Verified ~1.7× speedup on Qwen3.6-27B at `spec-draft-n-max: 4`
+   (see `scripts/bench_mtp_nmax.sh`).
+2. **Separate head, same repo** (purpose-built draft module shipped alongside the main quant,
+   e.g. gemma-4's `mtp-gemma-4-31B-it.gguf` in `unsloth/gemma-4-31B-it-GGUF`): the form shows a
+   **draft-head dropdown** (populated from `/api/quants`). Pick a head and the manager downloads
+   it, symlinks it to `<name>-mtp-head.gguf`, and passes `--spec-type draft-mtp --model-draft …`
+   to llama-server automatically — no manual params needed.
+3. **Separate head, different repo**: not auto-managed. Deploy the head repo as its own config,
+   then copy its served symlink path (shown on each **Disk Storage** card) into the main model's
+   `"model-draft"` parameter by hand.
 
-The *Enable MTP* checkbox only wires the flags; it does not validate that the model
-actually carries MTP heads.
+⚠️ Not every `*-MTP.gguf` works as a runtime draft — some "head-only" repos are **graft sources**
+for a `convert.py` step (incomplete hparams, declare the full base arch) and must be grafted into
+the base GGUF first. The grafted-name heuristic only gates auto-injection of the spec flags; the
+head dropdown is driven by actual file detection.
 
 > **Pin note:** `LLAMA_CPP_REF` is held at `d2462f8f` deliberately. The next commit
 > (`e95dae18`, #24086) regresses loading of dense non-MTP `qwen35` models (e.g. plain
@@ -113,7 +116,7 @@ Source files are selectively mounted via `docker-compose.dev.yml` (preserves com
 
 ### Tests
 
-127 tests across 9 test files. Run locally without Docker:
+139 tests across 9 test files. Run locally without Docker:
 
 ```bash
 ./dev.sh test
@@ -132,9 +135,9 @@ The frontend SPA has been modularized from a single ~700-line inline script into
 | `api.js` | API communication functions |
 | `filter.js` | Client-side search/filter |
 | `localmodels.js` | Disk storage data fetching |
-| `render.js` | UI rendering (cards, progress bars) |
+| `render.js` | UI rendering (cards, served symlink paths, progress bars) |
 | `ws.js` | WebSocket connection management |
-| `form.js` | Form handling and validation |
+| `form.js` | Form handling, validation, mmproj + MTP head wiring |
 | `app.js` | Main entry point, wires modules together |
 
 ### Source Structure
@@ -149,7 +152,7 @@ The frontend SPA has been modularized from a single ~700-line inline script into
 | `src/backend/cache.py` | HF cache scanning and pruning |
 | `src/backend/hf_hub.py` | HuggingFace API calls |
 | `src/backend/sync.py` | llama-swap config sync |
-| `src/backend/download.py` | PTY-based model downloads |
+| `src/backend/download.py` | Model downloads (disk-based progress, stall watchdog, resume) |
 | `src/backend/websocket.py` | WebSocket connection manager |
 | `src/frontend/index.html` | SPA HTML (forms, layout, styling) |
 | `src/frontend/js/*.js` | 9 modular JavaScript files |

@@ -232,12 +232,15 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         or existing.get("repo") != req.hf_repo
         or existing.get("quant") != req.quant
         or existing.get("mmproj", "") != req.mmproj
-        or existing.get("mtp_head", "") != req.mtp_head
+        # Only a NEW non-empty head needs fetching. Removing a head (req.mtp_head == "")
+        # just drops --model-draft on the next sync — nothing to download.
+        or (req.mtp_head and existing.get("mtp_head", "") != req.mtp_head)
         or existing.get("revision") != resolved_sha
         or existing.get("status") == "missing"
     )
 
     warning_msg = ""
+    model_size = 0
     if needs_download:
         os.makedirs("/models/.cache", exist_ok=True)
         try:
@@ -264,6 +267,7 @@ async def setup_model(req: ModelSetup, background_tasks: BackgroundTasks):
         "status": "downloading" if needs_download else "ready",
         "revision": resolved_sha,
         "mtp_head": req.mtp_head,
+        "dl_total": model_size if needs_download else existing.get("dl_total", 0),
     }
     save_state(state)
 
