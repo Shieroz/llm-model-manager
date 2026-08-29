@@ -82,6 +82,38 @@ class TestSyncSystem:
         sync_system(sample_state, restart=False)
         mock_threading.Thread.assert_not_called()
 
+    @patch("backend.sync.threading")
+    @patch("backend.cache.scan_cache_dir")
+    def test_does_not_restart_when_config_unchanged(self, mock_scan, mock_threading, sample_state, tmp_state_dir):
+        mock_cache = MagicMock()
+        mock_cache.repos = []
+        mock_scan.return_value = mock_cache
+
+        sync_system(sample_state, restart=True)
+        mock_threading.Thread.assert_called_once()
+
+        # Re-syncing identical state must not evict the loaded model.
+        mock_threading.Thread.reset_mock()
+        sync_system(sample_state, restart=True)
+        mock_threading.Thread.assert_not_called()
+
+    @patch("backend.sync.threading")
+    @patch("backend.cache.scan_cache_dir")
+    def test_restarts_when_config_changes(self, mock_scan, mock_threading, sample_state, tmp_state_dir):
+        mock_cache = MagicMock()
+        mock_cache.repos = []
+        mock_scan.return_value = mock_cache
+
+        sync_system(sample_state, restart=True)
+
+        config_path = os.path.join(str(tmp_state_dir), "config.yaml")
+        with open(config_path, "a") as f:
+            f.write("# drift\n")
+
+        mock_threading.Thread.reset_mock()
+        sync_system(sample_state, restart=True)
+        mock_threading.Thread.assert_called_once()
+
     @patch("backend.sync.os.path.isdir", return_value=True)
     @patch("huggingface_hub.scan_cache_dir")
     def test_emits_model_draft_for_same_repo_head(self, mock_scan, mock_isdir, tmp_state_dir):

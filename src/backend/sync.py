@@ -180,8 +180,22 @@ def sync_system(state: dict, restart: bool = True) -> None:
     if state_changed:
         save_state(state)
 
+    # Restarting llama-swap evicts the loaded model from VRAM and discards its
+    # in-process prompt cache, so only do it when the rendered config actually
+    # differs from what is already on disk.
+    rendered = yaml.dump({"models": swap_models}, default_flow_style=False, sort_keys=False)
+    try:
+        with open(CONFIG_PATH) as f:
+            unchanged = f.read() == rendered
+    except OSError:
+        unchanged = False
+
+    if unchanged:
+        log.info("llama-swap config.yaml unchanged; skipping rewrite and restart.")
+        return
+
     with open(CONFIG_PATH, 'w') as f:
-        yaml.dump({"models": swap_models}, f, default_flow_style=False, sort_keys=False)
+        f.write(rendered)
     log.info("llama-swap config.yaml rewritten.")
 
     if restart:
