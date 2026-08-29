@@ -31,11 +31,10 @@ services:
       args:
         # Single source of truth for the llama.cpp version across all backends.
         # Bump here (or override in .env) to rebuild against a newer commit;
-        # changing it busts the cached git-clone layer. d2462f8f (2026-06-09) has
-        # MTP support (PR #22673) + fixes. NOTE: do NOT advance to the next commit
-        # e95dae18 (#24086) — it regresses loading of dense non-MTP qwen35 models
-        # (e.g. plain Qwen3.6-27B). Bisect-verified; re-check when bumping.
-        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-d2462f8f7ac6d80070a587ffebf6cd73730f4280}
+        # changing it busts the cached git-clone layer. 6fe7498 has MTP
+        # (PR #22673) plus the ngram-mod drafter used by the Qwen3.8 configs.
+        # See README "Performance Tuning" for the flags these builds expect.
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-6fe7498}
     image: local/llama-swap:${LLAMA_BACKEND:-cuda}
     container_name: llama-swap
     restart: unless-stopped

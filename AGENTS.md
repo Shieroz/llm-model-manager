@@ -68,6 +68,46 @@ LLAMA_BACKEND=openvino ./up.sh
 
 Toggle via `/api/rpc_mode` — only models with `"rpc": true` in their params are synced when RPC mode is active. Filtered view in the UI shows RPC or Local configs based on the toggle state.
 
+## Performance gotchas (llama-server flags)
+
+Two failure modes here are **silent** — the model loads, serves, and returns correct output while
+running 15-45x slower than it should. Both are invisible to short-prompt smoke tests.
+
+1. **`-fitc` without `-ngl`.** `-fitc`/`--fit-ctx` is a *minimum context floor*, not a context
+   setting. With `-ngl` at its `auto` default, `--fit` honours the floor by evicting model layers
+   to CPU. Measured: 3.7 tok/s vs 66 tok/s on Qwen3.8-27B. Always write `"ngl": 99` plus an
+   explicit `"c"` into the params JSON; `--fit` then aborts loudly instead of degrading.
+2. **Insufficient VRAM headroom.** Prompt processing needs a transient compute buffer beyond the
+   weights + KV allocated at load. Below ~1.4 GB free on a 24 GB card the driver spills it to host
+   RAM over PCIe and prompt processing collapses (1042 -> 23 tok/s, worsening with prompt length,
+   GPU utilisation 0%). Never validate a config with a short prompt.
+
+When changing any serving flag, benchmark with a >40k-token prompt and read `prompt eval time`
+*and* `eval time` from the llama-swap logs — not just wall clock on a short request.
+
+**Reasoning effort is the biggest latency lever on Qwen3.8**, not any serving flag. Its chat
+template defaults to `xhigh` (`reasoning_effort|default('xhigh')`) — the *maximum* level — so any
+request omitting the field opts into the slowest mode. On a 22k agentic prompt that burned a
+4000-token cap entirely on thinking and returned no answer (65 s); `medium` answers in 17 s,
+`enable_thinking: false` in 13 s. Supported values are exactly `xhigh`/`medium`/`low` (`high` is
+silently promoted to `xhigh`); anything else raises from the template as HTTP 500. Set it per request via the OpenAI-standard
+`reasoning_effort` field — verified working through llama-swap for `xhigh`/`medium`/`low`/`none`
+(`none` disables thinking entirely). Two traps: `reasoning_budget` and `thinking:{type:disabled}`
+as request fields are **silently ignored** (200 OK, still thinks), and `minimal` is HTTP 500. The
+served configs leave reasoning unset deliberately so clients choose; do not pin a server-side
+default without asking.
+
+Two knobs worth knowing beyond the gotchas:
+
+- `-cram` (`--cache-ram`, default 8192 MiB) keeps evicted slot KV in host RAM. Returning to an
+  earlier long prompt then costs ~1 s instead of a full re-process (43 s for 45k tokens). One
+  262k conversation is ~7.2 GB, so the default holds only one — raise it for agentic use.
+- `-ub` cannot be raised at max context: the compute buffer competes with KV for the same
+  headroom. `-ub 2048` OOMs at load, `-ub 1024` buys +3 % PP for a headroom violation.
+
+See README "Performance Tuning" for the measured tables, the tuning dead-ends list, and the two
+Qwen3.8-27B reference configs (vision / no-vision).
+
 ## MTP (Multi-Token Prediction)
 
 Speculative decoding via llama.cpp's `--spec-type draft-mtp`. Three distribution patterns, handled simply:
@@ -76,7 +116,7 @@ Speculative decoding via llama.cpp's `--spec-type draft-mtp`. Three distribution
 2. **Separate head, same repo** (e.g. gemma-4's `mtp-gemma-4-31B-it.gguf`): `/api/quants` returns a `heads` list (detected by `is_mtp_head_file`, excluded from quants). The form shows a draft-head dropdown (mmproj-style). On deploy, `mtp_head` (rfilename) is stored in state; `download.py` fetches it, `sync.py` symlinks it to `{name}-mtp-head.gguf` and passes `--model-draft` (+ `--spec-type draft-mtp` if not already in params, skipping any `model-draft`/`md` in params).
 3. **Separate head, different repo**: not managed. Users deploy the head repo as its own config and copy its served symlink path (shown on each Disk Storage config card) into the main model's `model-draft` param by hand.
 
-Notes: `mtp_head` only forces a re-download when it's a *new non-empty* head (removing one just drops `--model-draft` on the next sync). The grafted heuristic only gates auto-injection of flags; the head dropdown is driven by real file detection.
+Notes: the grafted heuristic keys on an `mtp` token in the **repo name**, which misses repos that graft the head in without saying so — `unsloth/Qwen3.8-27B-GGUF` ships `blk.64.nextn.*` inside the main quant yet also publishes a redundant `MTP/mtp-*.gguf`. Selecting that head wires up a pointless `--model-draft` costing ~1.3 GB VRAM. Detect with `head -c 120M model.gguf | strings -n 5 | grep -c nextn`. `mtp_head` only forces a re-download when it's a *new non-empty* head (removing one just drops `--model-draft` on the next sync). The grafted heuristic only gates auto-injection of flags; the head dropdown is driven by real file detection.
 
 ## Frontend Module Structure
 The inline JS (~700 lines) has been modularized into 9 files loaded via `<script>` tags:
